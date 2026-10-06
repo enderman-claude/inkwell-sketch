@@ -6,7 +6,16 @@ const SW = ['#1b1b1f', '#ffffff', '#e5484d', '#f76b15', '#ffc53d', '#46a758', '#
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
 const mk = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; return c; };
-const S = { tool: 'pen', color: '#1b1b1f', size: 8, opacity: 100, stab: 40, active: 0, v: { x: 0, y: 0, k: 1 } };
+const BR = {
+  pen: { n: 'Pen', s: 8, o: 100, b: 0, p: .7 },
+  ink: { n: 'Ink', s: 6, o: 100, b: 0, p: 1 },
+  marker: { n: 'Marker', s: 24, o: 70, b: .5, p: .2 },
+  pencil: { n: 'Pencil', s: 4, o: 75, b: .25, p: .5 },
+  airbrush: { n: 'Airbrush', s: 60, o: 30, b: 1.2, p: .3 },
+  highlighter: { n: 'Highlighter', s: 34, o: 35, b: 0, p: 0 }
+};
+const S = { tool: 'brush', brush: 'pen', more: false, dbl: false, theme: 'dark', bg: { hex: '#000000', a: 0 }, color: '#1b1b1f', size: 8, opacity: 100, stab: 40, active: 1, v: { x: 0, y: 0, k: 1 } };
+const B = () => BR[S.brush];
 const layers = [], undo = [], redo = [];
 const cur = () => layers[S.active];
 
@@ -18,16 +27,19 @@ board.style.cssText = `width:${W}px;height:${H}px`;
 stage.append(board); app.append(stage);
 
 /* layers */
-function addLayer(name, paper) {
+function addLayer(name, bg) {
   const c = mk(), ctx = c.getContext('2d');
-  if (paper) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H); }
-  const L = { c, ctx, name, show: true, op: 1 };
-  layers.splice(paper ? 0 : S.active + 1, 0, L);
-  S.active = layers.indexOf(L); stack(); panel();
+  const L = { c, ctx, name, show: true, op: 1, lock: false, mode: 'normal', bg };
+  layers.splice(bg ? 0 : S.active + 1, 0, L);
+  S.active = bg ? 1 : layers.indexOf(L); stack(); panel(); return L;
+}
+function paintBg() {
+  const L = layers[0], n = parseInt(S.bg.hex.slice(1), 16);
+  L.ctx.clearRect(0, 0, W, H); L.ctx.fillStyle = `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${S.bg.a})`; L.ctx.fillRect(0, 0, W, H);
 }
 function stack() {
   board.replaceChildren();
-  layers.forEach((L, i) => { L.c.style.opacity = L.op; L.c.style.display = L.show ? '' : 'none'; board.append(L.c); if (i === S.active) board.append(stroke); });
+  layers.forEach((L, i) => { const s = L.c.style; s.opacity = L.op; s.display = L.show ? '' : 'none'; s.mixBlendMode = L.mode; board.append(L.c); if (i === S.active) board.append(stroke); });
 }
 
 /* view */
@@ -41,17 +53,17 @@ function push(s) { undo.push(s); if (undo.length > 40) undo.shift(); redo.length
 function step(a, b) { const s = a.pop(); if (!s) return; s.L.ctx.putImageData(a === undo ? s.before : s.after, s.x, s.y); b.push(s); }
 
 /* drawing */
-const wid = p => S.size * (.3 + .7 * p);
+const wid = p => { const k = B().p; return S.size * (1 - k + k * p); };
 function seg(c, x0, y0, x1, y1, w) { c.lineWidth = w; c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1 + .01, y1); c.stroke(); }
 let draw = null;
 function begin(e) {
-  const L = cur(); if (!L.show) return flash('This layer is hidden');
+  const L = cur(); if (!L.show) return flash('This layer is hidden'); if (L.lock) return flash('This layer is locked');
   const [x, y] = pt(e.clientX, e.clientY);
   if (S.tool === 'fill') return fill(L, x | 0, y | 0);
   const er = S.tool === 'eraser', c = er ? L.ctx : sctx;
   c.lineCap = c.lineJoin = 'round'; c.strokeStyle = S.color;
   if (er) { pctx.clearRect(0, 0, W, H); pctx.drawImage(L.c, 0, 0); c.globalCompositeOperation = 'destination-out'; }
-  else { sctx.clearRect(0, 0, W, H); stroke.style.opacity = S.opacity / 100; c.shadowBlur = S.tool === 'marker' ? S.size * .5 : 0; c.shadowColor = S.color; }
+  else { sctx.clearRect(0, 0, W, H); stroke.style.opacity = S.opacity / 100; c.shadowBlur = S.size * B().b; c.shadowColor = S.color; }
   draw = { L, c, x, y, tx: x, ty: y, bb: [x, y, x, y], p: 1 };
   move(e);
 }
@@ -70,7 +82,7 @@ function end() {
   const d = draw;
   for (let i = 0; i < 80 && Math.hypot(d.tx - d.x, d.ty - d.y) > .5; i++) follow(.25);
   draw = null;
-  const pad = S.size * 2 + 8, [a, b, c, e] = d.bb, x = clamp(Math.floor(a - pad), 0, W), y = clamp(Math.floor(b - pad), 0, H);
+  const pad = S.size * (2 + B().b) + 8, [a, b, c, e] = d.bb, x = clamp(Math.floor(a - pad), 0, W), y = clamp(Math.floor(b - pad), 0, H);
   const w = clamp(Math.ceil(c + pad), 0, W) - x, h = clamp(Math.ceil(e + pad), 0, H) - y, er = S.tool === 'eraser', L = d.L;
   if (w > 0 && h > 0) {
     const before = (er ? pctx : L.ctx).getImageData(x, y, w, h);
@@ -101,8 +113,8 @@ function fill(L, sx, sy) {
 
 /* input: pen/mouse draw, one finger draws, two fingers pinch/pan, two-finger tap undo, three-finger tap redo */
 const touches = new Map(); let g = null, tap = null, locked = false, pan = null, space = false;
-const pops = [];
-const closeAll = () => { pops.forEach(p => p.classList.remove('on')); puck.classList.remove('open'); };
+const pops = [], pucks = [];
+const closeAll = () => { pops.forEach(p => p.classList.remove('on')); pucks.forEach(p => p.classList.remove('open')); };
 stage.onpointerdown = e => {
   stage.setPointerCapture(e.pointerId); closeAll();
   if (e.pointerType === 'touch') {
@@ -144,21 +156,23 @@ stage.onpointerup = stage.onpointercancel = e => {
 stage.onwheel = e => { e.preventDefault(); zoomAt(e.clientX, e.clientY, S.v.k * Math.exp(-e.deltaY * (e.ctrlKey ? .01 : .0015))); };
 
 /* ui */
-const btn = (n, t, f, c = '') => { const b = el('button', 'btn ' + c, icon(n)); b.title = t; b.setAttribute('aria-label', t); b.onclick = f; return b; };
+const btn = (n, t, f, c = '', lb = '') => { const b = el('button', 'btn ' + c, icon(n) + (lb ? `<span class="lb">${lb}</span>` : '')); b.title = t; b.setAttribute('aria-label', t); b.onclick = f; return b; };
 const toast = el('div', 'toast'); app.append(toast); let tt;
-function flash(m) { toast.textContent = m; toast.classList.add('on'); clearTimeout(tt); tt = setTimeout(() => toast.classList.remove('on'), 1600); }
-function toggle(p) { const was = p.classList.contains('on'); closeAll(); p.classList.toggle('on', !was); }
+function flash(m) { toast.textContent = m; toast.classList.add('on'); clearTimeout(tt); tt = setTimeout(() => toast.classList.remove('on'), 1800); }
+function toggle(p) { const was = p.classList.contains('on'); pops.forEach(q => q.classList.remove('on')); p.classList.toggle('on', !was); }
+const MODE = m => m === 'normal' ? 'source-over' : m;
 function exportPng() {
   const c = mk(), x = c.getContext('2d');
-  layers.forEach(L => { if (L.show) { x.globalAlpha = L.op; x.drawImage(L.c, 0, 0); } });
+  layers.forEach(L => { if (L.show) { x.globalAlpha = L.op; x.globalCompositeOperation = MODE(L.mode); x.drawImage(L.c, 0, 0); } });
   c.toBlob(b => { const a = el('a'); a.href = URL.createObjectURL(b); a.download = 'sketch.png'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); });
 }
-const lp = el('div', 'pop'), sp = el('div', 'pop'), cp = el('div', 'pop'); lp.id = 'lp'; sp.id = 'sp'; cp.id = 'cp'; pops.push(lp, sp, cp);
+const mkPop = id => { const p = el('div', 'pop'); p.id = id; pops.push(p); return p; };
+const lp = mkPop('lp'), sp = mkPop('sp'), cp = mkPop('cp'), bp = mkPop('bp');
 
-const top = el('header', 'top'), g1 = el('div', 'grp'), g2 = el('div', 'grp');
-g1.append(btn('undo', 'Undo (Ctrl+Z)', () => step(undo, redo)), btn('redo', 'Redo (Ctrl+Shift+Z)', () => step(redo, undo)));
-g2.append(btn('layers', 'Layers', () => toggle(lp)), btn('tune', 'Settings', () => toggle(sp)), btn('fit', 'Fit to screen', fit), btn('download', 'Save as PNG', exportPng));
-top.append(g1, g2); app.append(top, lp, sp, cp);
+const top = el('header', 'top'), g1 = el('div', 'grp g1'), g2 = el('div', 'grp');
+g1.append(btn('undo', 'Undo (Ctrl+Z)', () => step(undo, redo), 'lab hd', 'Undo'), btn('redo', 'Redo (Ctrl+Shift+Z)', () => step(redo, undo), 'lab hd', 'Redo'));
+g2.append(btn('layers', 'Layers', () => toggle(lp), 'lab hd', 'Layers'), btn('tune', 'Settings', () => toggle(sp), 'lab hd', 'Settings'), btn('fit', 'Fit to screen', fit, 'lab', 'Fit'), btn('download', 'Save as PNG', exportPng, 'lab', 'Save'));
+top.append(g1, g2); app.append(top, lp, sp, cp, bp);
 
 const side = el('div', 'side'), prev = el('div', 'prev'), dot = el('i'), sls = el('div', 'sls');
 prev.append(dot); side.append(prev, sls); app.append(side);
@@ -169,53 +183,96 @@ function slider(label, min, max, key, fmt, parent) {
   i.oninput = () => set(+i.value); set(S[key]); w.append(v, i, el('span', '', label)); parent.append(w); return set;
 }
 const setSize = slider('Size', 1, 120, 'size', v => v + 'px', sls);
-slider('Opacity', 1, 100, 'opacity', v => v + '%', sls);
+const setOp = slider('Opacity', 1, 100, 'opacity', v => v + '%', sls);
 
-const puck = el('div', 'puck'), core = el('button', 'core'), ring = el('div', 'ring');
-core.title = 'Tools'; core.onclick = () => { const o = puck.classList.contains('open'); closeAll(); puck.classList.toggle('open', !o); };
-const tools = [['pen', 'Pen (B)'], ['marker', 'Marker (M)'], ['eraser', 'Eraser (E)'], ['fill', 'Fill (G)'], ['color', 'Colour']];
-tools.forEach(([n, t], i) => {
-  const b = btn(n, t, () => { if (n === 'color') { const was = cp.classList.contains('on'); pops.forEach(p => p.classList.remove('on')); cp.classList.toggle('on', !was); } else { S.tool = n; sync(); } });
-  const a = (-90 + i * 90 / (tools.length - 1)) * Math.PI / 180;
-  b.style.setProperty('--x', Math.cos(a) * 104 + 'px'); b.style.setProperty('--y', Math.sin(a) * 104 + 'px'); b.dataset.t = n; ring.append(b);
-});
-puck.append(ring, core); app.append(puck);
+function makePuck(right, items, label) {
+  const p = el('div', 'puck' + (right ? ' r' : '')), core = el('button', 'core'), ring = el('div', 'ring'); pucks.push(p);
+  core.title = label; core.setAttribute('aria-label', label);
+  core.onclick = () => { const o = p.classList.contains('open'); closeAll(); p.classList.toggle('open', !o); };
+  items.forEach(([n, t, f, k], i) => {
+    const b = btn(n, t, f, 'tool', t), a = (right ? -90 - i * 90 / (items.length - 1) : -90 + i * 90 / (items.length - 1)) * Math.PI / 180;
+    b.style.setProperty('--x', Math.cos(a) * 120 + 'px'); b.style.setProperty('--y', Math.sin(a) * 120 + 'px'); b.dataset.t = k || ''; ring.append(b);
+  });
+  p.append(ring, core); p.core = core; p.ring = ring; app.append(p); return p;
+}
+const pA = makePuck(false, [
+  ['pen', 'Brushes', () => { S.tool = 'brush'; sync(); toggle(bp); }, 'brush'],
+  ['eraser', 'Eraser', () => { S.tool = 'eraser'; sync(); }, 'eraser'],
+  ['fill', 'Fill', () => { S.tool = 'fill'; sync(); }, 'fill'],
+  ['color', 'Colour', () => toggle(cp)]], 'Tools');
+const pB = makePuck(true, [
+  ['undo', 'Undo', () => step(undo, redo)], ['redo', 'Redo', () => step(redo, undo)],
+  ['layers', 'Layers', () => toggle(lp)], ['tune', 'Settings', () => toggle(sp)]], 'Actions');
+pB.core.innerHTML = icon('menu');
 function sync() {
-  core.innerHTML = icon(S.tool); puck.style.setProperty('--c', S.color); prev.style.setProperty('--c', S.color);
-  ring.querySelectorAll('.btn').forEach(b => b.classList.toggle('sel', b.dataset.t === S.tool)); preview();
+  pA.core.innerHTML = icon(S.tool === 'brush' ? 'pen' : S.tool);
+  pucks.forEach(p => p.style.setProperty('--c', S.color)); prev.style.setProperty('--c', S.color);
+  pA.ring.querySelectorAll('.btn').forEach(b => b.classList.toggle('sel', b.dataset.t === S.tool)); preview(); brushes();
+}
+function pick(k) { S.brush = k; S.tool = 'brush'; setSize(BR[k].s); setOp(BR[k].o); sync(); }
+function brushes() {
+  bp.replaceChildren(); bp.append(el('div', 'ph', '<b>Brushes</b>'));
+  Object.entries(BR).forEach(([k, b], i) => {
+    if (i >= 4 && !S.more) return;
+    const r = el('button', 'brush' + (S.brush === k && S.tool === 'brush' ? ' on' : ''), `<i style="--s:${Math.min(b.s, 26)}px;--o:${b.o / 100};filter:blur(${b.b * 2}px)"></i><span>${b.n}</span><small>${b.s}px</small>`);
+    r.onclick = () => pick(k); bp.append(r);
+  });
+  const m = el('button', 'btn wide', S.more ? 'Show fewer' : 'More brushes'); m.onclick = () => { S.more = !S.more; brushes(); }; bp.append(m);
 }
 
-const ci = el('input'); ci.type = 'color'; ci.value = S.color; ci.oninput = () => { S.color = ci.value; sync(); };
+const ci = el('input'); ci.type = 'color'; ci.value = S.color; ci.setAttribute('aria-label', 'Colour'); ci.oninput = () => { S.color = ci.value; sync(); };
 const sw = el('div', 'sw'); SW.forEach(c => { const b = el('button'); b.style.setProperty('--c', c); b.setAttribute('aria-label', c); b.onclick = () => { ci.value = S.color = c; sync(); }; sw.append(b); });
 cp.append(ci, sw);
 
 function panel() {
-  lp.replaceChildren(); const h = el('div', 'ph', '<b>Layers</b>'); h.append(btn('plus', 'Add layer', () => addLayer('Layer ' + layers.length))); lp.append(h);
+  lp.replaceChildren(); const h = el('div', 'ph', '<b>Layers</b>'); h.append(btn('plus', 'Add layer', () => addLayer('Layer ' + layers.length), 'lab', 'Add')); lp.append(h);
   [...layers].reverse().forEach(L => {
-    const i = layers.indexOf(L), r = el('div', 'row' + (i === S.active ? ' on' : '')), nm = el('span', 'nm'), o = el('input');
-    nm.textContent = L.name; nm.onclick = () => { S.active = i; stack(); panel(); };
+    const i = layers.indexOf(L), r = el('div', 'lyr' + (i === S.active ? ' on' : '') + (L.bg ? ' bg' : '')), a = el('div', 'row'), b = el('div', 'row2');
+    if (L.bg) {
+      const ci2 = el('input'), ai = el('input'), rd = el('span'), n = parseInt(S.bg.hex.slice(1), 16);
+      const show = () => { const m = parseInt(S.bg.hex.slice(1), 16); rd.textContent = `RGBA ${m >> 16}, ${(m >> 8) & 255}, ${m & 255}, ${S.bg.a}`; }; void n;
+      ci2.type = 'color'; ci2.value = S.bg.hex; ci2.setAttribute('aria-label', 'Background colour'); ci2.oninput = () => { S.bg.hex = ci2.value; paintBg(); show(); };
+      ai.type = 'range'; ai.min = 0; ai.max = 100; ai.value = S.bg.a * 100; ai.setAttribute('aria-label', 'Background alpha'); ai.oninput = () => { S.bg.a = +(ai.value / 100).toFixed(2); paintBg(); show(); };
+      show(); const nm = el('span', 'nm', 'Background');
+      a.append(btn('lock', 'Fixed layer', () => flash('The background can’t be drawn on, moved or deleted')), nm, ci2); b.append(el('span', '', 'Alpha'), ai, rd);
+      r.append(a, b); lp.append(r); return;
+    }
+    const nm = el('span', 'nm'); nm.textContent = L.name; nm.title = 'Tap to select, double-tap to rename';
+    nm.onclick = () => { S.active = i; stack(); panel(); };
+    nm.ondblclick = () => { const v = prompt('Layer name', L.name); if (v) { L.name = v.slice(0, 24); panel(); } };
+    a.append(btn(L.show ? 'eye' : 'eyeoff', 'Show or hide', () => { L.show = !L.show; stack(); panel(); }), nm,
+      btn(L.lock ? 'lock' : 'unlock', L.lock ? 'Unlock layer' : 'Lock layer', () => { L.lock = !L.lock; panel(); }),
+      btn('copy', 'Duplicate layer', () => dup(L)), btn('up', 'Move up', () => shift(i, 1)), btn('down', 'Move down', () => shift(i, -1)), btn('trash', 'Delete layer', () => remove(i)));
+    const sel = el('select'), o = el('input'); sel.setAttribute('aria-label', 'Blend mode');
+    [['normal', 'Normal'], ['multiply', 'Multiply'], ['screen', 'Screen'], ['overlay', 'Overlay']].forEach(([v, t]) => { const op = el('option', '', t); op.value = v; sel.append(op); });
+    sel.value = L.mode; sel.onchange = () => { L.mode = sel.value; stack(); };
     o.type = 'range'; o.min = 0; o.max = 100; o.value = L.op * 100; o.setAttribute('aria-label', 'Layer opacity'); o.oninput = () => { L.op = o.value / 100; L.c.style.opacity = L.op; };
-    r.append(btn(L.show ? 'eye' : 'eyeoff', 'Show or hide', () => { L.show = !L.show; stack(); panel(); }), nm, o,
-      btn('up', 'Move up', () => shift(i, 1)), btn('down', 'Move down', () => shift(i, -1)), btn('trash', 'Delete layer', () => remove(i)));
-    lp.append(r);
+    b.append(sel, o); r.append(a, b); lp.append(r);
   });
 }
-function shift(i, d) { const j = i + d; if (j < 0 || j >= layers.length) return; [layers[i], layers[j]] = [layers[j], layers[i]]; if (S.active === i) S.active = j; else if (S.active === j) S.active = i; stack(); panel(); }
-function remove(i) { if (layers.length < 2) return flash('Keep at least one layer'); layers.splice(i, 1); S.active = Math.min(S.active, layers.length - 1); stack(); panel(); }
+function dup(L) { const n = addLayer(L.name + ' copy'); n.ctx.drawImage(L.c, 0, 0); n.op = L.op; n.mode = L.mode; stack(); panel(); }
+function shift(i, d) { const j = i + d; if (i < 1 || j < 1 || j >= layers.length) return; [layers[i], layers[j]] = [layers[j], layers[i]]; if (S.active === i) S.active = j; else if (S.active === j) S.active = i; stack(); panel(); }
+function remove(i) { if (layers.length < 3) return flash('Keep at least one drawing layer'); layers.splice(i, 1); if (i <= S.active) S.active--; S.active = Math.max(1, S.active); stack(); panel(); }
 
-const sl = el('label', '', 'Stabilizer'), si = el('input'); si.type = 'range'; si.min = 0; si.max = 92; si.value = S.stab; si.oninput = () => { S.stab = +si.value; }; sl.append(si);
+const sl = el('label'), sv = el('span'), si = el('input'); si.type = 'range'; si.min = 0; si.max = 92; si.value = S.stab;
+const lbl = () => { sv.textContent = 'Stabilizer ' + S.stab + '%'; }; lbl(); si.oninput = () => { S.stab = +si.value; lbl(); }; sl.append(sv, si);
+const tgl = (label, get, set) => { const b = el('button', 'btn wide'); b.setAttribute('role', 'switch'); const u = () => { b.setAttribute('aria-checked', get()); b.textContent = `${label}: ${get() ? 'On' : 'Off'}`; }; b.onclick = () => { set(!get()); u(); }; u(); return b; };
+const setTheme = l => { S.theme = l ? 'light' : 'dark'; document.documentElement.dataset.theme = S.theme; };
+const setDbl = on => { S.dbl = on; app.classList.toggle('dbl', on); closeAll(); };
 const clr = el('button', 'btn wide', 'Clear layer');
-clr.onclick = () => { const L = cur(), before = L.ctx.getImageData(0, 0, W, H); L.ctx.clearRect(0, 0, W, H); push({ L, x: 0, y: 0, before, after: L.ctx.getImageData(0, 0, W, H) }); };
-sp.append(sl, clr, el('p', 'txt', 'Pinch to zoom and pan. Tap with two fingers to undo, three to redo. Space + drag pans on desktop. B, M, E, G switch tools; [ and ] change size.'));
+clr.onclick = () => { const L = cur(); if (L.lock) return flash('This layer is locked'); const before = L.ctx.getImageData(0, 0, W, H); L.ctx.clearRect(0, 0, W, H); push({ L, x: 0, y: 0, before, after: L.ctx.getImageData(0, 0, W, H) }); };
+sp.append(sl, tgl('Double puck', () => S.dbl, setDbl), tgl('Light interface', () => S.theme === 'light', setTheme), clr,
+  el('p', 'txt', '<b>Two fingers</b> pinch, pan, tap to undo<br><b>Three fingers</b> tap to redo<br><b>Keys</b> B E G M tools, [ ] size, Space pans'));
 
 addEventListener('keydown', e => {
   const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey; if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
   if (m && k === 'z') { e.preventDefault(); e.shiftKey ? step(redo, undo) : step(undo, redo); }
   else if (m && k === 'y') step(redo, undo);
   else if (k === ' ') { space = true; e.preventDefault(); }
-  else if (!m) { const t = { b: 'pen', m: 'marker', e: 'eraser', g: 'fill' }[k]; if (t) { S.tool = t; sync(); } if (k === '[') setSize(S.size - 2); if (k === ']') setSize(S.size + 2); }
+  else if (!m) { const t = { b: 'brush', e: 'eraser', g: 'fill' }[k]; if (t) { S.tool = t; sync(); } if (k === 'm') pick('marker'); if (k === '[') setSize(S.size - 2); if (k === ']') setSize(S.size + 2); }
 });
 addEventListener('keyup', e => { if (e.key === ' ') space = false; });
 addEventListener('beforeunload', e => { if (undo.length) e.preventDefault(); });
 
-addLayer('Paper', true); addLayer('Sketch'); sync(); fit();
+addLayer('Background', true); addLayer('Sketch'); paintBg();
+setTheme(matchMedia('(prefers-color-scheme: light)').matches); sync(); fit();

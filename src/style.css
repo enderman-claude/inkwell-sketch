@@ -47,3 +47,33 @@ html,body,#app{margin:0;height:100%;overflow:hidden;background:var(--bg);color:v
 .toast{position:absolute;left:50%;bottom:30px;transform:translateX(-50%);padding:8px 14px;border-radius:99px;pointer-events:none;opacity:0;transition:opacity .2s}
 .toast.on{opacity:1}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+:root{--solid:#1a1b1e;--hov:#ffffff14}
+[data-theme=light]{--bg:#e6e7ea;--panel:#fffffff0;--solid:#fff;--line:#cdd0d6;--text:#1c1d21;--mut:#5d616b;--hov:#00000012}
+.board{isolation:isolate;background:repeating-conic-gradient(#d9d9dd 0 25%,#fff 0 50%) 0 0/32px 32px}
+.btn:hover{background:var(--hov)}
+.core,.ring .btn{background:var(--solid)}
+.ring .btn.sel{color:#fff}
+.btn .lb{display:none}
+.top .lab{width:auto;min-width:40px;padding:0 9px;grid-auto-flow:column;gap:6px}
+@media (min-width:760px){.top .lb{display:inline;font-size:13px}}
+.ph .lab .lb{display:inline;font-size:13px}
+.ring .lb{display:block;position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:2px;font-size:11px;white-space:nowrap;text-shadow:0 0 4px var(--bg)}
+.puck.r{left:auto;right:max(22px,env(safe-area-inset-right));display:none}
+.dbl .puck.r{display:block}
+.dbl .hd,.dbl .g1{display:none}
+#cp,#bp{left:10px;bottom:230px;width:240px;max-height:60vh;overflow:auto}
+@media (max-height:520px){#cp,#bp{left:215px;bottom:12px}}
+.brush{display:grid;grid-template-columns:64px 1fr auto;align-items:center;gap:8px;width:100%;padding:8px;border:0;border-radius:10px;background:none;color:var(--text);text-align:left;cursor:pointer;font:inherit}
+.brush:hover{background:var(--hov)}.brush.on{background:#4c7dff33}
+.brush i{display:block;min-height:2px;height:var(--s);border-radius:99px;background:var(--text);opacity:var(--o)}
+.brush small{color:var(--mut)}
+#bp .wide{width:100%;margin-top:6px}
+.lyr{border-radius:10px;padding:2px;margin-bottom:4px}
+.lyr.on{background:#4c7dff33}
+.lyr.bg{border-top:1px solid var(--line);margin-top:10px;padding-top:8px;background:none}
+.row2{display:flex;align-items:center;gap:8px;padding:0 6px 4px 38px;color:var(--mut);font-size:12px}
+.row2 input[type=range]{flex:1;width:auto;min-width:0}
+.row input[type=color]{width:34px;height:30px;border:0;background:none;padding:0}
+select{background:var(--solid);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:4px 6px;font:inherit;font-size:12px}
+#sp .wide{width:100%;color:var(--text)}
+#sp .txt b{color:var(--text)}

@@ -15,6 +15,10 @@ const P = {
   up: 'M6 14l6-6 6 6',
   down: 'M6 10l6 6 6-6',
   eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5z',
-  eyeoff: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM4 4l16 16'
+  eyeoff: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM4 4l16 16',
+  lock: 'M7 11V8a5 5 0 0110 0v3M6 11h12v9H6z',
+  unlock: 'M7 11V8a5 5 0 019-3M6 11h12v9H6z',
+  copy: 'M9 9h11v11H9zM5 15V4h11',
+  menu: 'M4 8h16M4 16h16'
 };
 export const icon = n => `<svg viewBox="0 0 24 24"><path d="${P[n]}"/></svg>`;
