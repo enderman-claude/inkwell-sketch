@@ -21,7 +21,7 @@ const cur = () => layers[S.active];
 
 const app = document.getElementById('app');
 const stage = el('div', 'stage'), board = el('div', 'board');
-const stroke = mk(), sctx = stroke.getContext('2d', { desynchronized: true }); stroke.className = 'stroke';
+const stroke = mk(), sctx = stroke.getContext('2d'); stroke.className = 'stroke';
 const pre = mk(), pctx = pre.getContext('2d');
 board.style.cssText = `width:${W}px;height:${H}px`;
 stage.append(board); app.append(stage);
@@ -50,7 +50,7 @@ function zoomAt(cx, cy, k) { const [x, y] = pt(cx, cy), r = stage.getBoundingCli
 
 /* history */
 function push(s) { undo.push(s); if (undo.length > 40) undo.shift(); redo.length = 0; }
-function step(a, b) { const s = a.pop(); if (!s) return; s.L.ctx.putImageData(a === undo ? s.before : s.after, s.x, s.y); b.push(s); }
+function step(a, b) { const s = a.pop(); if (!s) return flash(a === undo ? 'Nothing to undo' : 'Nothing to redo'); s.L.ctx.putImageData(a === undo ? s.before : s.after, s.x, s.y); b.push(s); }
 
 /* drawing */
 const wid = p => { const k = B().p; return S.size * (1 - k + k * p); };
@@ -58,7 +58,7 @@ function seg(c, x0, y0, x1, y1, w) { c.lineWidth = w; c.beginPath(); c.moveTo(x0
 let draw = null, curTool = 'brush';
 function begin(e) {
   if (S.picking || e.altKey) return pickAt(e);
-  const L = cur(); if (!L.show) return flash('This layer is hidden'); if (L.lock) return flash('This layer is locked');
+  const L = cur(); if (!L.show) return flash('This layer is hidden. Show it to draw on it'); if (L.lock) return flash('This layer is locked. Unlock it to draw on it');
   const [x, y] = pt(e.clientX, e.clientY);
   curTool = e.pointerType === 'pen' && (e.buttons & 32) ? 'eraser' : S.tool;
   if (curTool === 'fill') return fill(L, x | 0, y | 0);
@@ -168,7 +168,7 @@ stage.onpointerup = stage.onpointercancel = e => {
   pan = null; if (draw && draw.id === e.pointerId) end();
 };
 const ghost = el('div', 'ghost'); stage.append(ghost);
-function sawPen(e) { if (e.pointerType === 'pen' && !S.penSeen) { S.penSeen = true; if (S.touchDraw) { S.touchDraw = false; flash('Stylus found: fingers now pan and zoom'); fingerBtn.u(); } } }
+function sawPen(e) { if (e.pointerType === 'pen' && !S.penSeen) { S.penSeen = true; if (S.touchDraw) { S.touchDraw = false; flash('Stylus detected. Fingers now pan and zoom; turn on Finger drawing in Settings to change this', 3200); fingerBtn.u(); } } }
 function hover(e) {
   if (e.pointerType === 'touch') return; sawPen(e);
   const r = stage.getBoundingClientRect(), z = Math.max(5, S.size * S.v.k);
@@ -181,13 +181,13 @@ stage.onwheel = e => { e.preventDefault(); zoomAt(e.clientX, e.clientY, S.v.k * 
 /* ui */
 const btn = (n, t, f, c = '', lb = '') => { const b = el('button', 'btn ' + c, icon(n) + (lb ? `<span class="lb">${lb}</span>` : '')); b.title = t; b.setAttribute('aria-label', t); b.onclick = f; return b; };
 const toast = el('div', 'toast'); app.append(toast); let tt;
-function flash(m) { toast.textContent = m; toast.classList.add('on'); clearTimeout(tt); tt = setTimeout(() => toast.classList.remove('on'), 1800); }
+function flash(m, ms = 1800) { toast.textContent = m; toast.classList.add('on'); clearTimeout(tt); tt = setTimeout(() => toast.classList.remove('on'), ms); }
 function toggle(p) { const was = p.classList.contains('on'); pops.forEach(q => q.classList.remove('on')); p.classList.toggle('on', !was); if (p === cp && !was) { prevCol = S.color; old.style.setProperty('--c', prevCol); renderPal(); } }
 const MODE = m => m === 'normal' ? 'source-over' : m;
 function exportPng() {
   const c = mk(), x = c.getContext('2d');
   layers.forEach(L => { if (L.show) { x.globalAlpha = L.op; x.globalCompositeOperation = MODE(L.mode); x.drawImage(L.c, 0, 0); } });
-  c.toBlob(b => { const a = el('a'); a.href = URL.createObjectURL(b); a.download = 'sketch.png'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); });
+  c.toBlob(b => { const a = el('a'); a.href = URL.createObjectURL(b); a.download = 'sketch.png'; a.click(); flash('Saved sketch.png'); setTimeout(() => URL.revokeObjectURL(a.href), 4000); });
 }
 const mkPop = id => { const p = el('div', 'pop'); p.id = id; pops.push(p); return p; };
 const lp = mkPop('lp'), sp = mkPop('sp'), cp = mkPop('cp'), bp = mkPop('bp');
@@ -306,13 +306,13 @@ function swatches(box, list, remove) {
   box.replaceChildren();
   list.forEach(c => { const b = el('button'); b.style.setProperty('--c', c); b.title = c; b.setAttribute('aria-label', c); b.onclick = () => setColor(c); if (remove) b.oncontextmenu = e => { e.preventDefault(); remove(c); }; box.append(b); });
 }
-function renderPal() { swatches(rec, recent); swatches(sav, saved, c => { saved.splice(saved.indexOf(c), 1); LS('inkwell-saved', saved); renderPal(); flash('Removed ' + c); }); }
+function renderPal() { swatches(rec, recent); swatches(sav, saved, c => { saved.splice(saved.indexOf(c), 1); LS('inkwell-saved', saved); renderPal(); flash('Removed ' + c + ' from your palette'); }); }
 function addRecent(c) { const i = recent.indexOf(c); if (i === 0) return; if (i > 0) recent.splice(i, 1); recent.unshift(c); recent.length = Math.min(recent.length, 12); LS('inkwell-recent', recent); }
-function saveCol() { if (saved.includes(S.color)) return flash('Already saved'); saved.push(S.color); LS('inkwell-saved', saved); renderPal(); flash('Saved ' + S.color); }
-function startPick() { closeAll(); S.picking = true; flash('Tap the canvas to pick a colour'); }
-function pickAt(e) { const [x, y] = pt(e.clientX, e.clientY), c = sample(x, y); S.picking = false; if (c) { setColor(c); flash('Picked ' + c); } else flash('Nothing there to pick'); }
+function saveCol() { if (saved.includes(S.color)) return flash('That colour is already in your palette'); saved.push(S.color); LS('inkwell-saved', saved); renderPal(); flash('Added ' + S.color + ' to your palette'); }
+function startPick() { closeAll(); S.picking = true; flash('Tap anywhere on the canvas to pick that colour'); }
+function pickAt(e) { const [x, y] = pt(e.clientX, e.clientY), c = sample(x, y); S.picking = false; if (c) { setColor(c); flash('Picked ' + c); } else flash('Nothing to pick there. Try a spot with paint'); }
 act.append(btn('drop', 'Pick colour from canvas (I)', startPick, '', 'Pick'), btn('plus', 'Save colour to palette', saveCol, '', 'Save'));
-cp.append(cpk, cmp, act, el('small', '', 'Recent'), rec, el('small', '', 'Saved. Right-click or long-press to remove'), sav);
+cp.append(cpk, cmp, act, el('small', '', 'Recently used'), rec, el('small', '', 'Your palette. Right-click or long-press a swatch to remove it'), sav);
 
 function panel() {
   lp.replaceChildren(); const h = el('div', 'ph', '<b>Layers</b>'); h.append(btn('plus', 'Add layer', () => addLayer('Layer ' + layers.length), 'lab', 'Add')); lp.append(h);
@@ -324,15 +324,15 @@ function panel() {
       sw2.setAttribute('aria-label', 'Background colour'); const pk = picker({ g: () => S.bg.hsv, s: h => { S.bg.hsv = h; S.bg.hex = hsv2hex(...h); paintBg(); show(); } }); pk.hidden = true; sw2.onclick = () => { pk.hidden = !pk.hidden; };
       ai.type = 'range'; ai.min = 0; ai.max = 100; ai.value = S.bg.a * 100; ai.setAttribute('aria-label', 'Background alpha'); ai.oninput = () => { S.bg.a = +(ai.value / 100).toFixed(2); paintBg(); show(); };
       show(); const nm = el('span', 'nm', 'Background');
-      a.append(btn('lock', 'Fixed layer', () => flash('The background can’t be drawn on, moved or deleted')), nm, sw2); b.append(el('span', '', 'Alpha'), ai, rd);
+      a.append(btn('lock', 'Fixed layer', () => flash('The background is a fixed layer. Change its colour and alpha below')), nm, sw2); b.append(el('span', '', 'Alpha'), ai, rd);
       r.append(a, b, pk); lp.append(r); return;
     }
     const nm = el('span', 'nm'); nm.textContent = L.name; nm.title = 'Tap to select, double-tap to rename';
     nm.onclick = () => { S.active = i; stack(); panel(); };
     nm.ondblclick = () => { const v = prompt('Layer name', L.name); if (v) { L.name = v.slice(0, 24); panel(); } };
-    a.append(btn(L.show ? 'eye' : 'eyeoff', 'Show or hide', () => { L.show = !L.show; stack(); panel(); }), nm,
+    a.append(btn(L.show ? 'eye' : 'eyeoff', L.show ? 'Hide layer' : 'Show layer', () => { L.show = !L.show; stack(); panel(); }), nm,
       btn(L.lock ? 'lock' : 'unlock', L.lock ? 'Unlock layer' : 'Lock layer', () => { L.lock = !L.lock; panel(); }),
-      btn('copy', 'Duplicate layer', () => dup(L)), btn('up', 'Move up', () => shift(i, 1)), btn('down', 'Move down', () => shift(i, -1)), btn('trash', 'Delete layer', () => remove(i)));
+      btn('copy', 'Duplicate layer', () => dup(L)), btn('up', 'Move layer up', () => shift(i, 1)), btn('down', 'Move layer down', () => shift(i, -1)), btn('trash', 'Delete layer', () => remove(i)));
     const sel = el('select'), o = el('input'); sel.setAttribute('aria-label', 'Blend mode');
     [['normal', 'Normal'], ['multiply', 'Multiply'], ['screen', 'Screen'], ['overlay', 'Overlay']].forEach(([v, t]) => { const op = el('option', '', t); op.value = v; sel.append(op); });
     sel.value = L.mode; sel.onchange = () => { L.mode = sel.value; stack(); };
@@ -342,18 +342,18 @@ function panel() {
 }
 function dup(L) { const n = addLayer(L.name + ' copy'); n.ctx.drawImage(L.c, 0, 0); n.op = L.op; n.mode = L.mode; stack(); panel(); }
 function shift(i, d) { const j = i + d; if (i < 1 || j < 1 || j >= layers.length) return; [layers[i], layers[j]] = [layers[j], layers[i]]; if (S.active === i) S.active = j; else if (S.active === j) S.active = i; stack(); panel(); }
-function remove(i) { if (layers.length < 3) return flash('Keep at least one drawing layer'); layers.splice(i, 1); if (i <= S.active) S.active--; S.active = Math.max(1, S.active); stack(); panel(); }
+function remove(i) { if (layers.length < 3) return flash('You need at least one drawing layer'); layers.splice(i, 1); if (i <= S.active) S.active--; S.active = Math.max(1, S.active); stack(); panel(); }
 
 const sl = el('label'), sv = el('span'), si = el('input'); si.type = 'range'; si.min = 0; si.max = 92; si.value = S.stab;
-const lbl = () => { sv.textContent = 'Stabilizer ' + S.stab + '%'; }; lbl(); si.oninput = () => { S.stab = +si.value; lbl(); }; sl.append(sv, si);
+sl.title = 'Smooths shaky lines. Higher is smoother but follows your hand more slowly'; const lbl = () => { sv.textContent = 'Line smoothing ' + S.stab + '%'; }; lbl(); si.oninput = () => { S.stab = +si.value; lbl(); }; sl.append(sv, si);
 const tgl = (label, get, set) => { const b = el('button', 'btn wide'); b.setAttribute('role', 'switch'); const u = () => { b.setAttribute('aria-checked', get()); b.textContent = `${label}: ${get() ? 'On' : 'Off'}`; }; b.onclick = () => { set(!get()); u(); }; u(); b.u = u; return b; };
 const setTheme = l => { S.theme = l ? 'light' : 'dark'; document.documentElement.dataset.theme = S.theme; };
 const setDbl = on => { S.dbl = on; app.classList.toggle('dbl', on); closeAll(); if (on) requestAnimationFrame(() => place(dp, ...dp.pos)); };
 const clr = el('button', 'btn wide', 'Clear layer');
-clr.onclick = () => { const L = cur(); if (L.lock) return flash('This layer is locked'); const before = L.ctx.getImageData(0, 0, W, H); L.ctx.clearRect(0, 0, W, H); push({ L, x: 0, y: 0, before, after: L.ctx.getImageData(0, 0, W, H) }); };
+clr.onclick = () => { const L = cur(); if (L.lock) return flash('This layer is locked. Unlock it to clear it'); const before = L.ctx.getImageData(0, 0, W, H); L.ctx.clearRect(0, 0, W, H); push({ L, x: 0, y: 0, before, after: L.ctx.getImageData(0, 0, W, H) }); flash('Layer cleared. Undo brings it back'); };
 const fingerBtn = tgl('Finger drawing', () => S.touchDraw, v => { S.touchDraw = v; });
-sp.append(sl, fingerBtn, tgl('Double puck', () => S.dbl, setDbl), tgl('Light interface', () => S.theme === 'light', setTheme), clr,
-  el('p', 'txt', '<b>Two fingers</b> pinch, pan, tap to undo<br><b>Three fingers</b> tap to redo<br><b>Stylus</b> pressure and hover; pen eraser end erases where supported<br><b>Keys</b> B E G M tools, I picks colour, [ ] size, H hides UI, Esc closes panels, Space pans'));
+sp.append(el('div', 'ph', '<b>Settings</b>'), sl, fingerBtn, tgl('Double puck', () => S.dbl, setDbl), tgl('Light interface', () => S.theme === 'light', setTheme), clr,
+  el('p', 'txt', '<b>Touch</b> pinch with two fingers to zoom and pan. Tap with two fingers to undo, three to redo.<br><b>Stylus</b> pressure and hover work. The pen’s eraser end erases where supported.<br><b>Keyboard</b> B brush, E eraser, G fill, M marker, I pick colour, [ ] size, H hide interface, Space pan, Esc close panels.'));
 
 addEventListener('keydown', e => {
   const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey; if (k === 'escape') { closeAll(); return; }
@@ -372,3 +372,4 @@ setTheme(matchMedia('(prefers-color-scheme: light)').matches); S.hsv = hex2hsv(S
 { const v = LS('inkwell-pos'); place(pA, ...(v && v.a || [22, innerHeight - 92])); place(dp, ...(v && v.d || [innerWidth - 100, innerHeight - 130])); }
 addEventListener('resize', () => [pA, dp].forEach(q => place(q, ...q.pos)));
 sync(); fit();
+if (!LS('inkwell-seen')) { LS('inkwell-seen', 1); flash('Welcome to Inkwell. Tap the pen button to pick a tool and start drawing', 4000); }
