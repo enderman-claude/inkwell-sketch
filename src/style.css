@@ -58,9 +58,6 @@ html,body,#app{margin:0;height:100%;overflow:hidden;background:var(--bg);color:v
 @media (min-width:760px){.top .lb{display:inline;font-size:13px}}
 .ph .lab .lb{display:inline;font-size:13px}
 .ring .lb{display:block;position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:2px;font-size:11px;white-space:nowrap;text-shadow:0 0 4px var(--bg)}
-.puck.r{left:auto;right:max(22px,env(safe-area-inset-right));display:none}
-.dbl .puck.r{display:block}
-.dbl .hd,.dbl .g1{display:none}
 #cp,#bp{left:10px;bottom:230px;width:240px;max-height:60vh;overflow:auto}
 @media (max-height:520px){#cp,#bp{left:215px;bottom:12px}}
 .brush{display:grid;grid-template-columns:64px 1fr auto;align-items:center;gap:8px;width:100%;padding:8px;border:0;border-radius:10px;background:none;color:var(--text);text-align:left;cursor:pointer;font:inherit}
@@ -77,3 +74,22 @@ html,body,#app{margin:0;height:100%;overflow:hidden;background:var(--bg);color:v
 select{background:var(--solid);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:4px 6px;font:inherit;font-size:12px}
 #sp .wide{width:100%;color:var(--text)}
 #sp .txt b{color:var(--text)}
+
+.dpuck{position:absolute;width:76px;display:none;flex-direction:column;border-radius:38px;overflow:hidden;border:3px solid var(--c,#1b1b1f);background:var(--solid);box-shadow:0 6px 20px #0006;z-index:3}
+.dbl .dpuck{display:flex}.dbl .side{display:none}
+.dpuck button{border:0;padding:0;cursor:pointer;touch-action:none;display:block;width:100%}
+.dpuck .grip{height:16px;background:var(--hov);cursor:grab;position:relative}
+.dpuck .grip::after{content:"";position:absolute;left:50%;top:6px;width:24px;height:4px;margin-left:-12px;border-radius:2px;background:var(--mut)}
+.dpuck .dt{height:38px;display:grid;place-items:center;background:var(--solid)}
+.dpuck .dt i{display:block;border-radius:50%;background:var(--c)}
+.dpuck .db{height:40px;background:var(--c)}
+.core{touch-action:none}
+.chip{position:absolute;left:8px;top:50%;margin-top:-18px;width:36px;height:36px;border-radius:50%;background:var(--panel);border:1px solid var(--line);z-index:6;opacity:.8}
+.ghost{position:absolute;left:0;top:0;border:1px solid #fff;outline:1px solid #0009;border-radius:50%;pointer-events:none;display:none}
+.stage{cursor:none}
+.top,.side,.puck,.pop,.chip,.dpuck{transition:opacity .15s}
+.drawing .top,.drawing .side,.drawing .puck,.drawing .pop,.drawing .chip,.drawing .dpuck{opacity:.1}
+.drawing .grp,.drawing .sls,.drawing .prev,.drawing .core,.drawing .pop,.drawing .dpuck,.drawing .chip{pointer-events:none}
+.nui .top,.nui .side,.nui .puck,.nui .pop,.nui .dpuck{display:none!important}
+.nui .chip{opacity:.35}
+#cp,#bp{left:50%;transform:translateX(-50%);bottom:max(16px,env(safe-area-inset-bottom));width:min(260px,calc(100vw - 20px))}

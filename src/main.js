@@ -14,14 +14,14 @@ const BR = {
   airbrush: { n: 'Airbrush', s: 60, o: 30, b: 1.2, p: .3 },
   highlighter: { n: 'Highlighter', s: 34, o: 35, b: 0, p: 0 }
 };
-const S = { tool: 'brush', brush: 'pen', more: false, dbl: false, theme: 'dark', bg: { hex: '#000000', a: 0 }, color: '#1b1b1f', size: 8, opacity: 100, stab: 40, active: 1, v: { x: 0, y: 0, k: 1 } };
+const S = { tool: 'brush', brush: 'pen', more: false, dbl: false, touchDraw: true, penSeen: false, hsv: [0, 0, .11], theme: 'dark', bg: { hex: '#000000', a: 0 }, color: '#1b1b1f', size: 8, opacity: 100, stab: 40, active: 1, v: { x: 0, y: 0, k: 1 } };
 const B = () => BR[S.brush];
 const layers = [], undo = [], redo = [];
 const cur = () => layers[S.active];
 
 const app = document.getElementById('app');
 const stage = el('div', 'stage'), board = el('div', 'board');
-const stroke = mk(), sctx = stroke.getContext('2d'); stroke.className = 'stroke';
+const stroke = mk(), sctx = stroke.getContext('2d', { desynchronized: true }); stroke.className = 'stroke';
 const pre = mk(), pctx = pre.getContext('2d');
 board.style.cssText = `width:${W}px;height:${H}px`;
 stage.append(board); app.append(stage);
@@ -55,21 +55,22 @@ function step(a, b) { const s = a.pop(); if (!s) return; s.L.ctx.putImageData(a 
 /* drawing */
 const wid = p => { const k = B().p; return S.size * (1 - k + k * p); };
 function seg(c, x0, y0, x1, y1, w) { c.lineWidth = w; c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1 + .01, y1); c.stroke(); }
-let draw = null;
+let draw = null, curTool = 'brush';
 function begin(e) {
   const L = cur(); if (!L.show) return flash('This layer is hidden'); if (L.lock) return flash('This layer is locked');
   const [x, y] = pt(e.clientX, e.clientY);
-  if (S.tool === 'fill') return fill(L, x | 0, y | 0);
-  const er = S.tool === 'eraser', c = er ? L.ctx : sctx;
+  curTool = e.pointerType === 'pen' && (e.buttons & 32) ? 'eraser' : S.tool;
+  if (curTool === 'fill') return fill(L, x | 0, y | 0);
+  const er = curTool === 'eraser', c = er ? L.ctx : sctx;
   c.lineCap = c.lineJoin = 'round'; c.strokeStyle = S.color;
   if (er) { pctx.clearRect(0, 0, W, H); pctx.drawImage(L.c, 0, 0); c.globalCompositeOperation = 'destination-out'; }
   else { sctx.clearRect(0, 0, W, H); stroke.style.opacity = S.opacity / 100; c.shadowBlur = S.size * B().b; c.shadowColor = S.color; }
-  draw = { L, c, x, y, tx: x, ty: y, bb: [x, y, x, y], p: 1 };
-  move(e);
+  draw = { L, c, x, y, tx: x, ty: y, bb: [x, y, x, y], p: 1, n: 0, id: e.pointerId, pen: e.pointerType === 'pen' };
+  app.classList.add('drawing'); move(e);
 }
 function move(e) {
   const d = draw, [tx, ty] = pt(e.clientX, e.clientY);
-  d.p = e.pointerType === 'pen' ? Math.max(.08, e.pressure) : 1;
+  const r = e.pointerType === 'pen' ? Math.max(.05, e.pressure) ** .85 : 1; d.p = d.n++ ? d.p * .55 + r * .45 : r;
   d.tx = tx; d.ty = ty; follow(1 - S.stab / 100);
 }
 function follow(f) {
@@ -81,9 +82,9 @@ function follow(f) {
 function end() {
   const d = draw;
   for (let i = 0; i < 80 && Math.hypot(d.tx - d.x, d.ty - d.y) > .5; i++) follow(.25);
-  draw = null;
+  draw = null; app.classList.remove('drawing');
   const pad = S.size * (2 + B().b) + 8, [a, b, c, e] = d.bb, x = clamp(Math.floor(a - pad), 0, W), y = clamp(Math.floor(b - pad), 0, H);
-  const w = clamp(Math.ceil(c + pad), 0, W) - x, h = clamp(Math.ceil(e + pad), 0, H) - y, er = S.tool === 'eraser', L = d.L;
+  const w = clamp(Math.ceil(c + pad), 0, W) - x, h = clamp(Math.ceil(e + pad), 0, H) - y, er = curTool === 'eraser', L = d.L;
   if (w > 0 && h > 0) {
     const before = (er ? pctx : L.ctx).getImageData(x, y, w, h);
     if (!er) { L.ctx.globalAlpha = S.opacity / 100; L.ctx.drawImage(stroke, 0, 0); L.ctx.globalAlpha = 1; }
@@ -92,8 +93,8 @@ function end() {
   sctx.clearRect(0, 0, W, H); d.c.globalCompositeOperation = 'source-over'; d.c.shadowBlur = 0;
 }
 function cancel() {
-  if (!draw) return; const d = draw; draw = null; sctx.clearRect(0, 0, W, H);
-  if (S.tool === 'eraser') { d.c.globalCompositeOperation = 'source-over'; d.L.ctx.clearRect(0, 0, W, H); d.L.ctx.drawImage(pre, 0, 0); }
+  if (!draw) return; const d = draw; draw = null; app.classList.remove('drawing'); sctx.clearRect(0, 0, W, H);
+  if (curTool === 'eraser') { d.c.globalCompositeOperation = 'source-over'; d.L.ctx.clearRect(0, 0, W, H); d.L.ctx.drawImage(pre, 0, 0); }
 }
 function fill(L, sx, sy) {
   if (sx < 0 || sy < 0 || sx >= W || sy >= H) return;
@@ -116,7 +117,8 @@ const touches = new Map(); let g = null, tap = null, locked = false, pan = null,
 const pops = [], pucks = [];
 const closeAll = () => { pops.forEach(p => p.classList.remove('on')); pucks.forEach(p => p.classList.remove('open')); };
 stage.onpointerdown = e => {
-  stage.setPointerCapture(e.pointerId); closeAll();
+  if (e.pointerType === 'touch' && draw && draw.pen) return;
+  stage.setPointerCapture(e.pointerId); closeAll(); sawPen(e);
   if (e.pointerType === 'touch') {
     touches.set(e.pointerId, [e.clientX, e.clientY]);
     if (touches.size === 1) tap = { t: performance.now(), n: 1, m: 0 }; else if (tap) tap.n = Math.max(tap.n, touches.size);
@@ -127,9 +129,11 @@ stage.onpointerdown = e => {
   }
   if (e.button === 1 || space) { pan = { x: e.clientX, y: e.clientY, v: { ...S.v } }; return; }
   if (locked || e.button > 0) return;
+  if (e.pointerType === 'touch' && !S.touchDraw) { pan = { x: e.clientX, y: e.clientY, v: { ...S.v } }; return; }
   begin(e);
 };
 stage.onpointermove = e => {
+  hover(e);
   if (e.pointerType === 'touch' && touches.has(e.pointerId)) {
     touches.set(e.pointerId, [e.clientX, e.clientY]);
     if (g && touches.size >= 2) {
@@ -141,7 +145,7 @@ stage.onpointermove = e => {
     }
   }
   if (pan) { S.v = { ...pan.v, x: pan.v.x + e.clientX - pan.x, y: pan.v.y + e.clientY - pan.y }; apply(); return; }
-  if (draw) for (const c of (e.getCoalescedEvents?.() || [e])) move(c);
+  if (draw && e.pointerId === draw.id) for (const c of (e.getCoalescedEvents?.() || [e])) move(c);
 };
 stage.onpointerup = stage.onpointercancel = e => {
   if (e.pointerType === 'touch') {
@@ -151,8 +155,17 @@ stage.onpointerup = stage.onpointercancel = e => {
       tap = null; locked = false;
     }
   }
-  pan = null; if (draw) end();
+  pan = null; if (draw && draw.id === e.pointerId) end();
 };
+const ghost = el('div', 'ghost'); stage.append(ghost);
+function sawPen(e) { if (e.pointerType === 'pen' && !S.penSeen) { S.penSeen = true; if (S.touchDraw) { S.touchDraw = false; flash('Stylus found: fingers now pan and zoom'); fingerBtn.u(); } } }
+function hover(e) {
+  if (e.pointerType === 'touch') return; sawPen(e);
+  const r = stage.getBoundingClientRect(), z = Math.max(5, S.size * S.v.k);
+  ghost.style.cssText = `display:block;width:${z}px;height:${z}px;transform:translate(${e.clientX - r.left - z / 2}px,${e.clientY - r.top - z / 2}px)`;
+}
+stage.onpointerleave = () => { ghost.style.display = 'none'; };
+stage.oncontextmenu = e => e.preventDefault();
 stage.onwheel = e => { e.preventDefault(); zoomAt(e.clientX, e.clientY, S.v.k * Math.exp(-e.deltaY * (e.ctrlKey ? .01 : .0015))); };
 
 /* ui */
@@ -176,38 +189,62 @@ top.append(g1, g2); app.append(top, lp, sp, cp, bp);
 
 const side = el('div', 'side'), prev = el('div', 'prev'), dot = el('i'), sls = el('div', 'sls');
 prev.append(dot); side.append(prev, sls); app.append(side);
-function preview() { const s = Math.min(S.size, 40); dot.style.cssText = `width:${s}px;height:${s}px;opacity:${S.opacity / 100}`; }
+const dp = el('div', 'dpuck', '<button class="grip" aria-label="Move puck"></button><button class="dt" aria-label="Brush size and opacity: drag to change, tap for brushes"><i></i></button><button class="db" aria-label="Colour: drag to adjust, tap for colour editor"></button>');
+const dpDot = dp.querySelector('.dt i'); app.append(dp);
+function preview() { const s = Math.min(S.size, 40); dpDot.style.cssText = `width:${Math.min(s, 26)}px;height:${Math.min(s, 26)}px;opacity:${S.opacity / 100}`; dot.style.cssText = `width:${s}px;height:${s}px;opacity:${S.opacity / 100}`; }
 function slider(label, min, max, key, fmt, parent) {
   const w = el('label', 'vs'), v = el('span'), i = el('input'); i.type = 'range'; i.min = min; i.max = max;
   const set = x => { S[key] = clamp(x, min, max); i.value = S[key]; v.textContent = fmt(S[key]); preview(); };
   i.oninput = () => set(+i.value); set(S[key]); w.append(v, i, el('span', '', label)); parent.append(w); return set;
 }
-const setSize = slider('Size', 1, 120, 'size', v => v + 'px', sls);
-const setOp = slider('Opacity', 1, 100, 'opacity', v => v + '%', sls);
+const setSize = slider('Size', 1, 120, 'size', v => Math.round(v) + 'px', sls);
+const setOp = slider('Opacity', 1, 100, 'opacity', v => Math.round(v) + '%', sls);
 
-function makePuck(right, items, label) {
-  const p = el('div', 'puck' + (right ? ' r' : '')), core = el('button', 'core'), ring = el('div', 'ring'); pucks.push(p);
-  core.title = label; core.setAttribute('aria-label', label);
-  core.onclick = () => { const o = p.classList.contains('open'); closeAll(); p.classList.toggle('open', !o); };
-  items.forEach(([n, t, f, k], i) => {
-    const b = btn(n, t, f, 'tool', t), a = (right ? -90 - i * 90 / (items.length - 1) : -90 + i * 90 / (items.length - 1)) * Math.PI / 180;
-    b.style.setProperty('--x', Math.cos(a) * 120 + 'px'); b.style.setProperty('--y', Math.sin(a) * 120 + 'px'); b.dataset.t = k || ''; ring.append(b);
-  });
-  p.append(ring, core); p.core = core; p.ring = ring; app.append(p); return p;
+const LS = (k, v) => { try { return v === undefined ? JSON.parse(localStorage.getItem(k)) : localStorage.setItem(k, JSON.stringify(v)); } catch { return null; } };
+function place(p, x, y) {
+  x = clamp(x, 6, innerWidth - (p.offsetWidth || 64) - 6); y = clamp(y, 56, innerHeight - (p.offsetHeight || 64) - 6);
+  p.style.left = x + 'px'; p.style.top = y + 'px'; p.style.right = p.style.bottom = 'auto'; p.pos = [x, y];
 }
-const pA = makePuck(false, [
-  ['pen', 'Brushes', () => { S.tool = 'brush'; sync(); toggle(bp); }, 'brush'],
+function drag(node, o) {
+  let d = null; node.style.touchAction = 'none';
+  node.onpointerdown = e => { node.setPointerCapture(e.pointerId); d = { x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, m: false }; };
+  node.onpointermove = e => { if (!d || (!d.m && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 6)) return; d.m = true; o.move(e.clientX - d.lx, e.clientY - d.ly); d.lx = e.clientX; d.ly = e.clientY; };
+  node.onpointerup = () => { if (!d) return; const m = d.m; d = null; if (m) o.end && o.end(); else o.tap && o.tap(); };
+  node.onpointercancel = () => { d = null; };
+  node.addEventListener('click', e => { if (e.detail === 0 && o.tap) o.tap(); });
+}
+const savePos = () => LS('inkwell-pos', { a: pA.pos, d: dp.pos });
+function ringLayout(p) {
+  const dx = p.pos[0] + 32 < innerWidth / 2 ? 1 : -1, dy = p.pos[1] + 32 > innerHeight / 2 ? -1 : 1;
+  p.ring.querySelectorAll('.btn').forEach((b, i) => { const t = i / (p.n - 1) * Math.PI / 2; b.style.setProperty('--x', dx * Math.sin(t) * 120 + 'px'); b.style.setProperty('--y', dy * Math.cos(t) * 120 + 'px'); });
+}
+function makePuck(items, label) {
+  const p = el('div', 'puck'), core = el('button', 'core'), ring = el('div', 'ring'); pucks.push(p);
+  core.setAttribute('aria-label', label); core.title = label + ' (drag to move)';
+  const open = () => { const o = p.classList.contains('open'); closeAll(); if (!o) { ringLayout(p); p.classList.add('open'); } };
+  drag(core, { move: (dx, dy) => { pops.forEach(q => q.classList.remove('on')); p.classList.remove('open'); place(p, p.pos[0] + dx, p.pos[1] + dy); }, end: savePos, tap: open });
+  items.forEach(([n, t, f, k]) => { const b = btn(n, t, f, 'tool', t); b.dataset.t = k || ''; ring.append(b); });
+  p.append(ring, core); p.core = core; p.ring = ring; p.n = items.length; app.append(p); return p;
+}
+const pA = makePuck([
+  ['pen', 'Brushes', () => { S.tool = 'brush'; sync(); brushes(); toggle(bp); }, 'brush'],
   ['eraser', 'Eraser', () => { S.tool = 'eraser'; sync(); }, 'eraser'],
   ['fill', 'Fill', () => { S.tool = 'fill'; sync(); }, 'fill'],
   ['color', 'Colour', () => toggle(cp)]], 'Tools');
-const pB = makePuck(true, [
-  ['undo', 'Undo', () => step(undo, redo)], ['redo', 'Redo', () => step(redo, undo)],
-  ['layers', 'Layers', () => toggle(lp)], ['tune', 'Settings', () => toggle(sp)]], 'Actions');
-pB.core.innerHTML = icon('menu');
+
+function hex2hsv(x) { const n = parseInt(x.slice(1), 16), r = (n >> 16) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255, m = Math.max(r, g, b), d = m - Math.min(r, g, b); let h = 0; if (d) { h = m === r ? ((g - b) / d) % 6 : m === g ? (b - r) / d + 2 : (r - g) / d + 4; h *= 60; if (h < 0) h += 360; } return [h, m ? d / m : 0, m]; }
+function hsv2hex(h, s, v) { const f = n => { const k = (n + h / 60) % 6; return v - v * s * Math.max(0, Math.min(k, 4 - k, 1)); }; return '#' + [f(5), f(3), f(1)].map(t => Math.round(t * 255).toString(16).padStart(2, '0')).join(''); }
+function setColor(h) { S.color = h; S.hsv = hex2hsv(h); ci.value = h; sync(); }
+/* Double puck: top drags size (left/right) and opacity (up/down); bottom drags saturation and brightness */
+drag(dp.querySelector('.grip'), { move: (dx, dy) => place(dp, dp.pos[0] + dx, dp.pos[1] + dy), end: savePos });
+drag(dp.querySelector('.dt'), { move: (dx, dy) => { setSize(S.size * Math.exp(dx * .012)); setOp(S.opacity - dy * .4); }, tap: () => { S.tool = 'brush'; sync(); brushes(); toggle(bp); } });
+drag(dp.querySelector('.db'), { move: (dx, dy) => { S.hsv[1] = clamp(S.hsv[1] + dx * .006, 0, 1); S.hsv[2] = clamp(S.hsv[2] - dy * .006, 0, 1); S.color = hsv2hex(...S.hsv); ci.value = S.color; sync(); }, tap: () => toggle(cp) });
+const chip = btn('eye', 'Hide or show interface (H)', () => hideUi(), 'chip'); app.append(chip);
+function hideUi() { const h = app.classList.toggle('nui'); chip.innerHTML = icon(h ? 'eyeoff' : 'eye'); }
 function sync() {
   pA.core.innerHTML = icon(S.tool === 'brush' ? 'pen' : S.tool);
-  pucks.forEach(p => p.style.setProperty('--c', S.color)); prev.style.setProperty('--c', S.color);
-  pA.ring.querySelectorAll('.btn').forEach(b => b.classList.toggle('sel', b.dataset.t === S.tool)); preview(); brushes();
+  pucks.forEach(p => p.style.setProperty('--c', S.color)); prev.style.setProperty('--c', S.color); dp.style.setProperty('--c', S.color);
+  pA.ring.querySelectorAll('.btn').forEach(b => b.classList.toggle('sel', b.dataset.t === S.tool)); preview(); if (bp.classList.contains('on')) brushes();
 }
 function pick(k) { S.brush = k; S.tool = 'brush'; setSize(BR[k].s); setOp(BR[k].o); sync(); }
 function brushes() {
@@ -220,8 +257,8 @@ function brushes() {
   const m = el('button', 'btn wide', S.more ? 'Show fewer' : 'More brushes'); m.onclick = () => { S.more = !S.more; brushes(); }; bp.append(m);
 }
 
-const ci = el('input'); ci.type = 'color'; ci.value = S.color; ci.setAttribute('aria-label', 'Colour'); ci.oninput = () => { S.color = ci.value; sync(); };
-const sw = el('div', 'sw'); SW.forEach(c => { const b = el('button'); b.style.setProperty('--c', c); b.setAttribute('aria-label', c); b.onclick = () => { ci.value = S.color = c; sync(); }; sw.append(b); });
+const ci = el('input'); ci.type = 'color'; ci.value = S.color; ci.setAttribute('aria-label', 'Colour'); ci.oninput = () => setColor(ci.value);
+const sw = el('div', 'sw'); SW.forEach(c => { const b = el('button'); b.style.setProperty('--c', c); b.setAttribute('aria-label', c); b.onclick = () => setColor(c); sw.append(b); });
 cp.append(ci, sw);
 
 function panel() {
@@ -256,16 +293,18 @@ function remove(i) { if (layers.length < 3) return flash('Keep at least one draw
 
 const sl = el('label'), sv = el('span'), si = el('input'); si.type = 'range'; si.min = 0; si.max = 92; si.value = S.stab;
 const lbl = () => { sv.textContent = 'Stabilizer ' + S.stab + '%'; }; lbl(); si.oninput = () => { S.stab = +si.value; lbl(); }; sl.append(sv, si);
-const tgl = (label, get, set) => { const b = el('button', 'btn wide'); b.setAttribute('role', 'switch'); const u = () => { b.setAttribute('aria-checked', get()); b.textContent = `${label}: ${get() ? 'On' : 'Off'}`; }; b.onclick = () => { set(!get()); u(); }; u(); return b; };
+const tgl = (label, get, set) => { const b = el('button', 'btn wide'); b.setAttribute('role', 'switch'); const u = () => { b.setAttribute('aria-checked', get()); b.textContent = `${label}: ${get() ? 'On' : 'Off'}`; }; b.onclick = () => { set(!get()); u(); }; u(); b.u = u; return b; };
 const setTheme = l => { S.theme = l ? 'light' : 'dark'; document.documentElement.dataset.theme = S.theme; };
-const setDbl = on => { S.dbl = on; app.classList.toggle('dbl', on); closeAll(); };
+const setDbl = on => { S.dbl = on; app.classList.toggle('dbl', on); closeAll(); if (on) requestAnimationFrame(() => place(dp, ...dp.pos)); };
 const clr = el('button', 'btn wide', 'Clear layer');
 clr.onclick = () => { const L = cur(); if (L.lock) return flash('This layer is locked'); const before = L.ctx.getImageData(0, 0, W, H); L.ctx.clearRect(0, 0, W, H); push({ L, x: 0, y: 0, before, after: L.ctx.getImageData(0, 0, W, H) }); };
-sp.append(sl, tgl('Double puck', () => S.dbl, setDbl), tgl('Light interface', () => S.theme === 'light', setTheme), clr,
-  el('p', 'txt', '<b>Two fingers</b> pinch, pan, tap to undo<br><b>Three fingers</b> tap to redo<br><b>Keys</b> B E G M tools, [ ] size, Space pans'));
+const fingerBtn = tgl('Finger drawing', () => S.touchDraw, v => { S.touchDraw = v; });
+sp.append(sl, fingerBtn, tgl('Double puck', () => S.dbl, setDbl), tgl('Light interface', () => S.theme === 'light', setTheme), clr,
+  el('p', 'txt', '<b>Two fingers</b> pinch, pan, tap to undo<br><b>Three fingers</b> tap to redo<br><b>Stylus</b> pressure and hover; pen eraser end erases where supported<br><b>Keys</b> B E G M tools, [ ] size, H hides UI, Space pans'));
 
 addEventListener('keydown', e => {
   const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey; if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
+  if (k === 'h' && !m) { hideUi(); return; }
   if (m && k === 'z') { e.preventDefault(); e.shiftKey ? step(redo, undo) : step(undo, redo); }
   else if (m && k === 'y') step(redo, undo);
   else if (k === ' ') { space = true; e.preventDefault(); }
@@ -275,4 +314,7 @@ addEventListener('keyup', e => { if (e.key === ' ') space = false; });
 addEventListener('beforeunload', e => { if (undo.length) e.preventDefault(); });
 
 addLayer('Background', true); addLayer('Sketch'); paintBg();
-setTheme(matchMedia('(prefers-color-scheme: light)').matches); sync(); fit();
+setTheme(matchMedia('(prefers-color-scheme: light)').matches); S.hsv = hex2hsv(S.color);
+{ const v = LS('inkwell-pos'); place(pA, ...(v && v.a || [22, innerHeight - 92])); place(dp, ...(v && v.d || [innerWidth - 100, innerHeight - 130])); }
+addEventListener('resize', () => [pA, dp].forEach(q => place(q, ...q.pos)));
+sync(); fit();
