@@ -2,7 +2,8 @@ import './style.css';
 import { icon } from './icons.js';
 import { mod, attach, hooks, resetAll, insets } from './modules.js';
 import { W, H, mk, layers, makeLayer, flatten, MODE } from './doc.js';
-import { push, undo, redo, patch, whole, hist, touch, canUndo } from './history.js';
+import { push, undo, redo, patch, whole, hist, touch, canUndo, clearHistory } from './history.js';
+import * as IO from './io.js';
 
 const SW = ['#1b1b1f', '#ffffff', '#e5484d', '#f76b15', '#ffc53d', '#46a758', '#12a594', '#3e63dd', '#8e4ec6', '#d6409f', '#a18072', '#8b8d98'];
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -203,13 +204,8 @@ function placePop(p) {
   if (e === 'top') y = r.bottom + g; else if (e === 'bottom') y = r.top - h - g; else if (e === 'left') x = r.right + g; else x = r.left - w - g;
   p.style.left = clamp(x, 6 + i.l, innerWidth - w - 6 - i.r) + 'px'; p.style.top = clamp(y, 6 + i.t, innerHeight - h - 6 - i.b) + 'px';
 }
-function exportPng() {
-  const c = mk(), x = c.getContext('2d');
-  layers.forEach(L => { if (L.show) { x.globalAlpha = L.op; x.globalCompositeOperation = MODE(L.mode); x.drawImage(L.c, 0, 0); } });
-  c.toBlob(b => { const a = el('a'); a.href = URL.createObjectURL(b); a.download = 'sketch.png'; a.click(); flash('Saved sketch.png'); setTimeout(() => URL.revokeObjectURL(a.href), 4000); });
-}
 const mkPop = id => { const p = el('div', 'pop'); p.id = id; pops.push(p); return p; };
-const lp = mkPop('lp'), sp = mkPop('sp'), cp = mkPop('cp'), bp = mkPop('bp');
+const lp = mkPop('lp'), sp = mkPop('sp'), cp = mkPop('cp'), bp = mkPop('bp'), fp = mkPop('fp');
 hooks.lift = closeAll; hooks.move = m => pops.forEach(p => p.anc === m && placePop(p));
 
 /* modules: each piece of UI is a module that can be dragged and docked (see modules.js). Defaults are { e: edge, t: 0..1 along it } */
@@ -217,8 +213,8 @@ const M = {}, grip = label => { const g = el('button', 'grip'); g.title = 'Drag 
 
 const bar = el('header', 'mod bar'), barGrip = grip('Move toolbar');
 bar.append(barGrip, btn('undo', 'Undo (Ctrl+Z)', () => doUndo(), 'lab', 'Undo'), btn('redo', 'Redo (Ctrl+Shift+Z)', () => doRedo(), 'lab', 'Redo'), el('i', 'sep'),
-  btn('layers', 'Layers', () => toggle(lp, M.bar), 'lab', 'Layers'), btn('tune', 'Settings', () => toggle(sp, M.bar), 'lab', 'Settings'), btn('fit', 'Fit to screen', fit, 'lab', 'Fit'), btn('download', 'Save as PNG', exportPng, 'lab', 'Save'));
-app.append(bar, lp, sp, cp, bp); M.bar = mod('bar', bar, { e: 'top', t: .5 }); attach(M.bar, barGrip);
+  btn('layers', 'Layers', () => toggle(lp, M.bar), 'lab', 'Layers'), btn('tune', 'Settings', () => toggle(sp, M.bar), 'lab', 'Settings'), btn('fit', 'Fit to screen', fit, 'lab', 'Fit'), btn('download', 'File: save, open, import, export', () => toggle(fp, M.bar), 'lab', 'File'));
+app.append(bar, lp, sp, cp, bp, fp); M.bar = mod('bar', bar, { e: 'top', t: .5 }); attach(M.bar, barGrip);
 
 const side = el('div', 'mod panel size'), prev = el('div', 'prev'), dot = el('i'), sls = el('div', 'sls'), sideGrip = grip('Move brush size and opacity');
 prev.append(dot); side.append(sideGrip, prev, sls); app.append(side); M.size = mod('size', side, { e: 'right', t: .3 }); attach(M.size, sideGrip);
@@ -400,9 +396,53 @@ const fingerBtn = tgl('Finger drawing', () => S.touchDraw, v => { S.touchDraw = 
 sp.append(el('div', 'ph', '<b>Settings</b>'), sl, fingerBtn, tgl('Double puck', () => S.dbl, setDbl), tgl('Light interface', () => S.theme === 'light', setTheme), rst, clr,
   el('p', 'txt', '<b>Touch</b> pinch with two fingers to zoom and pan. Tap with two fingers to undo, three to redo.<br><b>Stylus</b> pressure and hover work. The pen’s eraser end erases where supported.<br><b>Keyboard</b> B brush, E eraser, G fill, M marker, I pick colour, [ ] size, H hide interface, Space pan, Esc close panels.<br><b>Layout</b> drag a grip (or a puck) and drop it near a screen edge to dock and rotate it. Drop it anywhere else and it returns home.'));
 
+/* files: autosave, project file, import, export (see io.js) */
+let autosaveOn = false;
+hist.onedit = () => { if (autosaveOn) IO.schedule(); };
+IO.io.extra = () => ({ bg: S.bg, active: S.active }); IO.io.busy = () => !!draw;
+const fpStat = el('small', 'stat'), fx = el('div', 'fx');
+function fileStatus() {
+  fpStat.textContent = IO.io.failed ? 'Autosave is unavailable in this browser. Save a project file to keep your work.' : IO.io.last ? 'Autosaved at ' + new Date(IO.io.last).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Autosave is on. Your drawing survives a closed tab or refresh.';
+}
+IO.io.onstatus = fileStatus; fileStatus();
+const fileIn = (accept, cb) => { const i = el('input'); i.type = 'file'; i.accept = accept; i.onchange = () => { if (i.files[0]) cb(i.files[0]); }; i.click(); };
+async function applySnap(snap) {
+  await IO.load(snap); if (snap.bg && snap.bg.hex) S.bg = snap.bg;
+  S.active = clamp(snap.active || 1, 1, layers.length - 1); clearHistory(); stack(); panel();
+}
+function newDrawing() {
+  if (!confirm('Start a new drawing? The current one will be cleared. Save a project first if you want to keep it.')) return;
+  layers.length = 0; S.bg = { hex: '#000000', hsv: [0, 0, 0], a: 0 }; S.active = 1; addLayer('Background', true); addLayer('Sketch', false, true); paintBg(); clearHistory(); IO.schedule(300); flash('New drawing');
+}
+function openProject(f) {
+  const go = async f => {
+    if (!confirm('Open this project? Your current drawing will be replaced. Save a project first if you want to keep it.')) return;
+    try { await applySnap(await IO.readProject(f)); IO.schedule(300); flash('Opened ' + f.name); } catch { flash('That file is not an Inkwell project'); }
+  };
+  f && f.name ? go(f) : fileIn('.inkwell,application/json', go);
+}
+async function saveProject() { flash('Saving project…'); IO.download(await IO.projectFile(), 'sketch.inkwell'); flash('Saved sketch.inkwell'); }
+async function exportAs(type, ext) { flash('Exporting…'); IO.download(await IO.exportImage(type), 'sketch.' + ext); flash('Exported sketch.' + ext); }
+async function importImage(f) {
+  let bmp; try { bmp = await createImageBitmap(f); } catch { return flash('Could not read that image'); }
+  const k = Math.min(1, W / bmp.width, H / bmp.height), w = bmp.width * k, h = bmp.height * k;
+  const L = makeLayer({ name: ((f.name || 'Image').replace(/\.[^.]+$/, '') || 'Image').slice(0, 24) });
+  L.ctx.drawImage(bmp, (W - w) / 2, (H - h) / 2, w, h); bmp.close && bmp.close(); insertOp(L, S.active + 1); flash('Imported on a new layer');
+}
+const fbtn = (t, f) => { const b = el('button', 'btn wide', t); b.onclick = () => { closeAll(); f(); }; return b; };
+[['PNG', 'image/png', 'png'], ['JPEG', 'image/jpeg', 'jpg'], ['WebP', 'image/webp', 'webp']].forEach(([n, t, x]) => { const b = el('button', 'btn wide', n); b.onclick = () => { closeAll(); exportAs(t, x); }; fx.append(b); });
+fp.append(el('div', 'ph', '<b>File</b>'), fbtn('New drawing', newDrawing), fbtn('Open project…', () => openProject()), fbtn('Save project (Ctrl+S)', saveProject),
+  fbtn('Import image… (or paste or drop one)', () => fileIn('image/*', importImage)), el('small', '', 'Export a flat image'), fx, fpStat);
+addEventListener('paste', e => { if (/INPUT|TEXTAREA/.test(e.target.tagName)) return; const f = [...(e.clipboardData && e.clipboardData.files || [])].find(f => f.type.startsWith('image/')); if (f) { e.preventDefault(); importImage(f); } });
+stage.ondragover = e => e.preventDefault();
+stage.ondrop = e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (!f) return; if (/\.inkwell$/i.test(f.name)) openProject(f); else if (f.type.startsWith('image/')) importImage(f); };
+
 addEventListener('keydown', e => {
   const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey; if (k === 'escape') { closeAll(); return; }
   if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
+  if (m && k === 's') { e.preventDefault(); saveProject(); return; }
+  if (m && k === 'o') { e.preventDefault(); openProject(); return; }
+  if (m && k === 'e') { e.preventDefault(); exportAs('image/png', 'png'); return; }
   if (k === 'h' && !m) { hideUi(); return; }
   if (m && k === 'z') { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); }
   else if (m && k === 'y') doRedo();
@@ -410,9 +450,15 @@ addEventListener('keydown', e => {
   else if (!m) { const t = { b: 'brush', e: 'eraser', g: 'fill' }[k]; if (t) { S.tool = t; sync(); } if (k === 'm') pick('marker'); if (k === 'i') startPick(); if (k === '[') setSize(S.size - 2); if (k === ']') setSize(S.size + 2); }
 });
 addEventListener('keyup', e => { if (e.key === ' ') space = false; });
-addEventListener('beforeunload', e => { if (canUndo()) e.preventDefault(); });
+addEventListener('beforeunload', e => { if (IO.pending() || (IO.io.failed && canUndo())) e.preventDefault(); });
+addEventListener('pagehide', () => IO.save());
+document.addEventListener('visibilitychange', () => { if (document.hidden) IO.save(); });
 
 addLayer('Background', true); addLayer('Sketch', false, true); paintBg();
 setTheme(matchMedia('(prefers-color-scheme: light)').matches); S.hsv = hex2hsv(S.color);
 sync(); fit();
+IO.recover().then(async s => {
+  if (s && !canUndo()) { try { await applySnap(s); flash('Restored your last session', 2600); } catch { } }
+  autosaveOn = true; if (s === null) fileStatus();
+});
 if (!LS('inkwell-seen')) { LS('inkwell-seen', 1); flash('Welcome to Inkwell. Tap the pen button to pick a tool and start drawing', 4000); }

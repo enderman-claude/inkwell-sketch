@@ -101,3 +101,7 @@ input[type=number]{-moz-appearance:textfield}
 .pal button{aspect-ratio:1;border-radius:50%;border:2px solid #0004;background:var(--c);padding:0;cursor:pointer}
 .btn.on{background:#4c7dff55}
 .acts{justify-content:flex-end;padding:0 6px 4px}
+#fp{width:min(250px,calc(100vw - 20px));display:none;gap:6px;flex-direction:column}
+#fp.on{display:flex}
+.fx{display:flex;gap:6px}.fx .btn{flex:1;width:auto}
+.stat{color:var(--mut);line-height:1.35}
