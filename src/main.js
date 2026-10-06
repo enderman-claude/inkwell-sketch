@@ -16,7 +16,7 @@ const BR = {
   airbrush: { n: 'Airbrush', s: 60, o: 30, b: 1.2, p: .3 },
   highlighter: { n: 'Highlighter', s: 34, o: 35, b: 0, p: 0 }
 };
-const S = { tool: 'brush', brush: 'pen', more: false, dbl: false, touchDraw: true, penSeen: false, hsv: [0, 0, .11], theme: 'dark', bg: { hex: '#000000', hsv: [0, 0, 0], a: 0 }, color: '#1b1b1f', size: 8, opacity: 100, stab: 40, active: 1, v: { x: 0, y: 0, k: 1 } };
+const S = { tool: 'brush', brush: 'pen', more: false, dbl: false, touchDraw: true, penSeen: false, hsv: [0, 0, .11], theme: 'dark', bg: { hex: '#000000', hsv: [0, 0, 0], a: 0 }, color: '#1b1b1f', size: 8, opacity: 100, stab: 40, active: 1, v: { x: 0, y: 0, k: 1, r: 0 } };
 const B = () => BR[S.brush];
 const cur = () => layers[S.active];
 
@@ -51,11 +51,19 @@ function stack() {
   layers.forEach((L, i) => { const s = L.c.style; s.opacity = L.op; s.display = L.show ? '' : 'none'; s.mixBlendMode = L.mode; board.append(L.c); if (i === S.active) board.append(stroke); });
 }
 
-/* view */
-const apply = () => { board.style.transform = `translate(${S.v.x}px,${S.v.y}px) scale(${S.v.k})`; };
-function fit() { const r = stage.getBoundingClientRect(), k = Math.min(r.width / W, r.height / H) * .94; S.v = { k, x: (r.width - W * k) / 2, y: (r.height - H * k) / 2 }; apply(); }
-function pt(cx, cy) { const r = stage.getBoundingClientRect(); return [(cx - r.left - S.v.x) / S.v.k, (cy - r.top - S.v.y) / S.v.k]; }
-function zoomAt(cx, cy, k) { const [x, y] = pt(cx, cy), r = stage.getBoundingClientRect(); k = clamp(k, .1, 16); S.v = { k, x: cx - r.left - x * k, y: cy - r.top - y * k }; apply(); }
+/* view: pan, zoom and rotate. Only the view changes; the artwork underneath is never rotated or resized */
+const ROT = Math.PI / 12, norm = a => Math.atan2(Math.sin(a), Math.cos(a));
+const apply = () => { board.style.transform = `translate(${S.v.x}px,${S.v.y}px) rotate(${S.v.r}rad) scale(${S.v.k})`; board.style.setProperty('--k', S.v.k); };
+function fit() { const r = stage.getBoundingClientRect(), k = Math.min(r.width / W, r.height / H) * .94; S.v = { k, r: 0, x: (r.width - W * k) / 2, y: (r.height - H * k) / 2 }; apply(); }
+/* screen point -> canvas point */
+function pt(cx, cy) { const r = stage.getBoundingClientRect(), v = S.v, dx = cx - r.left - v.x, dy = cy - r.top - v.y, c = Math.cos(v.r), s = Math.sin(v.r); return [(dx * c + dy * s) / v.k, (-dx * s + dy * c) / v.k]; }
+/* set zoom k and rotation rot so that canvas point p appears at screen point (sx, sy) */
+function anchor(p, sx, sy, k, rot) { const r = stage.getBoundingClientRect(), c = Math.cos(rot), s = Math.sin(rot); S.v = { k, r: rot, x: sx - r.left - k * (c * p[0] - s * p[1]), y: sy - r.top - k * (s * p[0] + c * p[1]) }; apply(); }
+const zoomAt = (cx, cy, k) => anchor(pt(cx, cy), cx, cy, clamp(k, .1, 16), S.v.r);
+const mid = () => { const r = stage.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; };
+const zoom100 = () => zoomAt(...mid(), 1);
+const rotateTo = rot => { const [cx, cy] = mid(); anchor(pt(cx, cy), cx, cy, S.v.k, norm(rot)); };
+const rotateBy = d => rotateTo(S.v.r + d), resetRot = () => rotateTo(0);
 
 /* history */
 const doUndo = () => { if (!undo()) flash('Nothing to undo'); }, doRedo = () => { if (!redo()) flash('Nothing to redo'); };
@@ -144,7 +152,7 @@ stage.onpointerdown = e => {
     if (touches.size === 1) tap = { t: performance.now(), n: 1, m: 0 }; else if (tap) tap.n = Math.max(tap.n, touches.size);
     if (touches.size >= 2) {
       cancel(); locked = true; const [a, b] = [...touches.values()];
-      g = { d: Math.hypot(a[0] - b[0], a[1] - b[1]) || 1, mx: (a[0] + b[0]) / 2, my: (a[1] + b[1]) / 2, v: { ...S.v } }; return;
+      const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2; g = { d: Math.hypot(a[0] - b[0], a[1] - b[1]) || 1, a: Math.atan2(b[1] - a[1], b[0] - a[0]), mx, my, p: pt(mx, my), v: { ...S.v } }; return;
     }
   }
   if (e.button === 1 || space) { pan = { x: e.clientX, y: e.clientY, v: { ...S.v } }; return; }
@@ -158,10 +166,10 @@ stage.onpointermove = e => {
     touches.set(e.pointerId, [e.clientX, e.clientY]);
     if (g && touches.size >= 2) {
       const [a, b] = [...touches.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]), mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
-      if (tap) tap.m = Math.abs(d - g.d) + Math.hypot(mx - g.mx, my - g.my);
-      const k = clamp(g.v.k * d / g.d, .1, 16), r = stage.getBoundingClientRect();
-      const x = (g.mx - r.left - g.v.x) / g.v.k, y = (g.my - r.top - g.v.y) / g.v.k;
-      S.v = { k, x: mx - r.left - x * k, y: my - r.top - y * k }; apply(); return;
+      const da = norm(Math.atan2(b[1] - a[1], b[0] - a[0]) - g.a);
+      if (tap) tap.m = Math.abs(d - g.d) + Math.hypot(mx - g.mx, my - g.my) + Math.abs(da) * 80;
+      let rot = norm(g.v.r + da); if (Math.abs(rot) < .06) rot = 0;       // twist snaps back to upright
+      anchor(g.p, mx, my, clamp(g.v.k * d / g.d, .1, 16), rot); return;
     }
   }
   if (pan) { S.v = { ...pan.v, x: pan.v.x + e.clientX - pan.x, y: pan.v.y + e.clientY - pan.y }; apply(); return; }
@@ -186,7 +194,7 @@ function hover(e) {
 }
 stage.onpointerleave = () => { ghost.style.display = 'none'; };
 stage.oncontextmenu = e => e.preventDefault();
-stage.onwheel = e => { e.preventDefault(); zoomAt(e.clientX, e.clientY, S.v.k * Math.exp(-e.deltaY * (e.ctrlKey ? .01 : .0015))); };
+stage.onwheel = e => { e.preventDefault(); if (e.altKey) { const p = pt(e.clientX, e.clientY); anchor(p, e.clientX, e.clientY, S.v.k, norm(S.v.r - e.deltaY * .002)); } else zoomAt(e.clientX, e.clientY, S.v.k * Math.exp(-e.deltaY * (e.ctrlKey ? .01 : .0015))); };
 
 /* ui */
 const btn = (n, t, f, c = '', lb = '') => { const b = el('button', 'btn ' + c, icon(n) + (lb ? `<span class="lb">${lb}</span>` : '')); b.title = t; b.setAttribute('aria-label', t); b.onclick = f; return b; };
@@ -213,7 +221,7 @@ const M = {}, grip = label => { const g = el('button', 'grip'); g.title = 'Drag 
 
 const bar = el('header', 'mod bar'), barGrip = grip('Move toolbar');
 bar.append(barGrip, btn('undo', 'Undo (Ctrl+Z)', () => doUndo(), 'lab', 'Undo'), btn('redo', 'Redo (Ctrl+Shift+Z)', () => doRedo(), 'lab', 'Redo'), el('i', 'sep'),
-  btn('layers', 'Layers', () => toggle(lp, M.bar), 'lab', 'Layers'), btn('tune', 'Settings', () => toggle(sp, M.bar), 'lab', 'Settings'), btn('fit', 'Fit to screen', fit, 'lab', 'Fit'), btn('download', 'File: save, open, import, export', () => toggle(fp, M.bar), 'lab', 'File'));
+  btn('layers', 'Layers', () => toggle(lp, M.bar), 'lab', 'Layers'), btn('tune', 'Settings', () => toggle(sp, M.bar), 'lab', 'Settings'), btn('download', 'File: save, open, import, export', () => toggle(fp, M.bar), 'lab', 'File'));
 app.append(bar, lp, sp, cp, bp, fp); M.bar = mod('bar', bar, { e: 'top', t: .5 }); attach(M.bar, barGrip);
 
 const side = el('div', 'mod panel size'), prev = el('div', 'prev'), dot = el('i'), sls = el('div', 'sls'), sideGrip = grip('Move brush size and opacity');
@@ -265,6 +273,9 @@ function setColor(h) { S.color = h; S.hsv = hex2hsv(h); sync(); }
 drag(dp.querySelector('.dt'), { move: (dx, dy) => { setSize(S.size * Math.exp(dx * .012)); setOp(S.opacity - dy * .4); }, tap: () => { S.tool = 'brush'; sync(); brushes(); toggle(bp, M.dbl); } });
 drag(dp.querySelector('.db'), { move: (dx, dy) => { S.hsv[1] = clamp(S.hsv[1] + dx * .006, 0, 1); S.hsv[2] = clamp(S.hsv[2] - dy * .006, 0, 1); S.color = hsv2hex(...S.hsv); sync(); }, tap: () => toggle(cp, M.dbl) });
 const chip = btn('eye', 'Hide or show interface (H)', null, 'mod chip keep'); app.append(chip); M.chip = mod('chip', chip, { e: 'left', t: .5 }); attach(M.chip, chip, { tap: () => hideUi() });
+const vw = el('div', 'mod panel viewm'), vgrip = grip('Move view controls');
+vw.append(vgrip, btn('fit', 'Fit to screen and reset rotation (0)', fit), btn('one', 'Zoom to 100% (1)', zoom100), btn('rotl', 'Rotate canvas left (Shift+R)', () => rotateBy(-ROT)), btn('rotr', 'Rotate canvas right (R)', () => rotateBy(ROT)), btn('north', 'Reset rotation', resetRot));
+app.append(vw); M.view = mod('view', vw, { e: 'bottom', t: .62 }); attach(M.view, vgrip);
 function hideUi() { const h = app.classList.toggle('nui'); chip.innerHTML = icon(h ? 'eyeoff' : 'eye'); }
 function sync() {
   pA.core.innerHTML = icon(S.tool === 'brush' ? 'pen' : S.tool);
@@ -394,7 +405,7 @@ const clr = el('button', 'btn wide', 'Clear layer');
 clr.onclick = () => { const L = cur(); if (L.lock) return flash('This layer is locked. Unlock it to clear it'); const before = L.ctx.getImageData(0, 0, W, H); L.ctx.clearRect(0, 0, W, H); L.dirty = true; push(patch(L, 0, 0, before, L.ctx.getImageData(0, 0, W, H))); flash('Layer cleared. Undo brings it back'); };
 const fingerBtn = tgl('Finger drawing', () => S.touchDraw, v => { S.touchDraw = v; });
 sp.append(el('div', 'ph', '<b>Settings</b>'), sl, fingerBtn, tgl('Double puck', () => S.dbl, setDbl), tgl('Light interface', () => S.theme === 'light', setTheme), rst, clr,
-  el('p', 'txt', '<b>Touch</b> pinch with two fingers to zoom and pan. Tap with two fingers to undo, three to redo.<br><b>Stylus</b> pressure and hover work. The pen’s eraser end erases where supported.<br><b>Keyboard</b> B brush, E eraser, G fill, M marker, I pick colour, [ ] size, H hide interface, Space pan, Esc close panels.<br><b>Layout</b> drag a grip (or a puck) and drop it near a screen edge to dock and rotate it. Drop it anywhere else and it returns home.'));
+  el('p', 'txt', '<b>Touch</b> pinch and twist with two fingers to zoom, pan and rotate the view. Tap with two fingers to undo, three to redo.<br><b>Stylus</b> pressure and hover work. The pen’s eraser end erases where supported.<br><b>Keyboard</b> B brush, E eraser, G fill, M marker, I pick colour, [ ] size, H hide interface, Space pan, 0 fit, 1 actual size, R rotate view, Esc close panels.<br><b>Layout</b> drag a grip (or a puck) and drop it near a screen edge to dock and rotate it. Drop it anywhere else and it returns home.'));
 
 /* files: autosave, project file, import, export (see io.js) */
 let autosaveOn = false;
@@ -447,7 +458,7 @@ addEventListener('keydown', e => {
   if (m && k === 'z') { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); }
   else if (m && k === 'y') doRedo();
   else if (k === ' ') { space = true; e.preventDefault(); }
-  else if (!m) { const t = { b: 'brush', e: 'eraser', g: 'fill' }[k]; if (t) { S.tool = t; sync(); } if (k === 'm') pick('marker'); if (k === 'i') startPick(); if (k === '[') setSize(S.size - 2); if (k === ']') setSize(S.size + 2); }
+  else if (!m) { const t = { b: 'brush', e: 'eraser', g: 'fill' }[k]; if (t) { S.tool = t; sync(); } if (k === 'm') pick('marker'); if (k === '0') fit(); if (k === '1') zoom100(); if (k === 'r') rotateBy(e.shiftKey ? -ROT : ROT); if (k === 'i') startPick(); if (k === '[') setSize(S.size - 2); if (k === ']') setSize(S.size + 2); }
 });
 addEventListener('keyup', e => { if (e.key === ' ') space = false; });
 addEventListener('beforeunload', e => { if (IO.pending() || (IO.io.failed && canUndo())) e.preventDefault(); });

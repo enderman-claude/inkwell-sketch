@@ -21,6 +21,10 @@ const P = {
   copy: 'M9 9h11v11H9zM5 15V4h11',
   menu: 'M4 8h16M4 16h16',
   drop: 'M14 4l6 6-3 3-6-6zM11 7l-7 7v4h4l7-7',
+  one: 'M9 8l3-2v12M8 18h8',
+  rotl: 'M4 12a8 8 0 103-6.2M4 4v5h5',
+  rotr: 'M20 12a8 8 0 11-3-6.2M20 4v5h-5',
+  north: 'M12 3l4 8H8zM12 11v10M8 21h8',
   alpha: 'M4 4h16v16H4zM4 12h8V4M12 20h8v-8',
   merge: 'M6 4v5a6 6 0 006 6 6 6 0 006-6V4M12 15v6M9 18l3 3 3-3'
 };
