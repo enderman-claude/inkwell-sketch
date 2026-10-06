@@ -1,5 +1,6 @@
 import './style.css';
 import { icon } from './icons.js';
+import { mod, attach, hooks, resetAll, insets } from './modules.js';
 
 const W = 2048, H = 1536;
 const SW = ['#1b1b1f', '#ffffff', '#e5484d', '#f76b15', '#ffc53d', '#46a758', '#12a594', '#3e63dd', '#8e4ec6', '#d6409f', '#a18072', '#8b8d98'];
@@ -182,7 +183,18 @@ stage.onwheel = e => { e.preventDefault(); zoomAt(e.clientX, e.clientY, S.v.k * 
 const btn = (n, t, f, c = '', lb = '') => { const b = el('button', 'btn ' + c, icon(n) + (lb ? `<span class="lb">${lb}</span>` : '')); b.title = t; b.setAttribute('aria-label', t); b.onclick = f; return b; };
 const toast = el('div', 'toast'); app.append(toast); let tt;
 function flash(m, ms = 1800) { toast.textContent = m; toast.classList.add('on'); clearTimeout(tt); tt = setTimeout(() => toast.classList.remove('on'), ms); }
-function toggle(p) { const was = p.classList.contains('on'); pops.forEach(q => q.classList.remove('on')); p.classList.toggle('on', !was); if (p === cp && !was) { prevCol = S.color; old.style.setProperty('--c', prevCol); renderPal(); } }
+function toggle(p, a) {
+  const was = p.classList.contains('on'); pops.forEach(q => q.classList.remove('on')); p.classList.toggle('on', !was); if (a) p.anc = a;
+  if (!was) { if (p === cp) { prevCol = S.color; old.style.setProperty('--c', prevCol); renderPal(); } placePop(p); }
+}
+/* A panel opens beside the module that opened it, on the side with room */
+function placePop(p) {
+  const a = p.anc; if (!a || !p.classList.contains('on')) return;
+  const r = a.node.getBoundingClientRect(), w = p.offsetWidth, h = p.offsetHeight, e = a.at.e, g = 8, i = insets();
+  let x = r.left + r.width / 2 - w / 2, y = r.top + r.height / 2 - h / 2;
+  if (e === 'top') y = r.bottom + g; else if (e === 'bottom') y = r.top - h - g; else if (e === 'left') x = r.right + g; else x = r.left - w - g;
+  p.style.left = clamp(x, 6 + i.l, innerWidth - w - 6 - i.r) + 'px'; p.style.top = clamp(y, 6 + i.t, innerHeight - h - 6 - i.b) + 'px';
+}
 const MODE = m => m === 'normal' ? 'source-over' : m;
 function exportPng() {
   const c = mk(), x = c.getContext('2d');
@@ -191,16 +203,20 @@ function exportPng() {
 }
 const mkPop = id => { const p = el('div', 'pop'); p.id = id; pops.push(p); return p; };
 const lp = mkPop('lp'), sp = mkPop('sp'), cp = mkPop('cp'), bp = mkPop('bp');
+hooks.lift = closeAll; hooks.move = m => pops.forEach(p => p.anc === m && placePop(p));
 
-const top = el('header', 'top'), g1 = el('div', 'grp g1'), g2 = el('div', 'grp');
-g1.append(btn('undo', 'Undo (Ctrl+Z)', () => step(undo, redo), 'lab hd', 'Undo'), btn('redo', 'Redo (Ctrl+Shift+Z)', () => step(redo, undo), 'lab hd', 'Redo'));
-g2.append(btn('layers', 'Layers', () => toggle(lp), 'lab hd', 'Layers'), btn('tune', 'Settings', () => toggle(sp), 'lab hd', 'Settings'), btn('fit', 'Fit to screen', fit, 'lab', 'Fit'), btn('download', 'Save as PNG', exportPng, 'lab', 'Save'));
-top.append(g1, g2); app.append(top, lp, sp, cp, bp);
+/* modules: each piece of UI is a module that can be dragged and docked (see modules.js). Defaults are { e: edge, t: 0..1 along it } */
+const M = {}, grip = label => { const g = el('button', 'grip'); g.title = 'Drag to move. Drop near a screen edge to dock it'; g.setAttribute('aria-label', label); return g; };
 
-const side = el('div', 'side'), prev = el('div', 'prev'), dot = el('i'), sls = el('div', 'sls');
-prev.append(dot); side.append(prev, sls); app.append(side);
-const dp = el('div', 'dpuck', '<button class="grip" aria-label="Move puck"></button><button class="dt" aria-label="Brush size and opacity: drag to change, tap for brushes"><i></i></button><button class="db" aria-label="Colour: drag to adjust, tap for colour editor"></button>');
-const dpDot = dp.querySelector('.dt i'); app.append(dp);
+const bar = el('header', 'mod bar'), barGrip = grip('Move toolbar');
+bar.append(barGrip, btn('undo', 'Undo (Ctrl+Z)', () => step(undo, redo), 'lab', 'Undo'), btn('redo', 'Redo (Ctrl+Shift+Z)', () => step(redo, undo), 'lab', 'Redo'), el('i', 'sep'),
+  btn('layers', 'Layers', () => toggle(lp, M.bar), 'lab', 'Layers'), btn('tune', 'Settings', () => toggle(sp, M.bar), 'lab', 'Settings'), btn('fit', 'Fit to screen', fit, 'lab', 'Fit'), btn('download', 'Save as PNG', exportPng, 'lab', 'Save'));
+app.append(bar, lp, sp, cp, bp); M.bar = mod('bar', bar, { e: 'top', t: .5 }); attach(M.bar, barGrip);
+
+const side = el('div', 'mod panel size'), prev = el('div', 'prev'), dot = el('i'), sls = el('div', 'sls'), sideGrip = grip('Move brush size and opacity');
+prev.append(dot); side.append(sideGrip, prev, sls); app.append(side); M.size = mod('size', side, { e: 'right', t: .3 }); attach(M.size, sideGrip);
+const dp = el('div', 'mod dpuck', '<button class="grip" aria-label="Move puck"></button><button class="dt" aria-label="Brush size and opacity: drag to change, tap for brushes"><i></i></button><button class="db" aria-label="Colour: drag to adjust, tap for colour editor"></button>');
+const dpDot = dp.querySelector('.dt i'); app.append(dp); M.dbl = mod('dbl', dp, { e: 'right', t: .8 }); attach(M.dbl, dp.querySelector('.grip'));
 function preview() { const s = Math.min(S.size, 40); dpDot.style.cssText = `width:${Math.min(s, 26)}px;height:${Math.min(s, 26)}px;opacity:${S.opacity / 100}`; dot.style.cssText = `width:${s}px;height:${s}px;opacity:${S.opacity / 100}`; }
 function slider(label, min, max, key, fmt, parent) {
   const w = el('label', 'vs'), v = el('span'), i = el('input'); i.type = 'range'; i.min = min; i.max = max;
@@ -211,10 +227,6 @@ const setSize = slider('Size', 1, 120, 'size', v => Math.round(v) + 'px', sls);
 const setOp = slider('Opacity', 1, 100, 'opacity', v => Math.round(v) + '%', sls);
 
 const LS = (k, v) => { try { return v === undefined ? JSON.parse(localStorage.getItem(k)) : localStorage.setItem(k, JSON.stringify(v)); } catch { return null; } };
-function place(p, x, y) {
-  x = clamp(x, 6, innerWidth - (p.offsetWidth || 64) - 6); y = clamp(y, 56, innerHeight - (p.offsetHeight || 64) - 6);
-  p.style.left = x + 'px'; p.style.top = y + 'px'; p.style.right = p.style.bottom = 'auto'; p.pos = [x, y];
-}
 function drag(node, o) {
   let d = null; node.style.touchAction = 'none';
   node.onpointerdown = e => { node.setPointerCapture(e.pointerId); d = { x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, m: false }; };
@@ -223,33 +235,33 @@ function drag(node, o) {
   node.onpointercancel = () => { d = null; };
   node.addEventListener('click', e => { if (e.detail === 0 && o.tap) o.tap(); });
 }
-const savePos = () => LS('inkwell-pos', { a: pA.pos, d: dp.pos });
 function ringLayout(p) {
-  const dx = p.pos[0] + 32 < innerWidth / 2 ? 1 : -1, dy = p.pos[1] + 32 > innerHeight / 2 ? -1 : 1;
-  p.ring.querySelectorAll('.btn').forEach((b, i) => { const t = i / (p.n - 1) * Math.PI / 2; b.style.setProperty('--x', dx * Math.sin(t) * 120 + 'px'); b.style.setProperty('--y', dy * Math.cos(t) * 120 + 'px'); });
+  const r = p.getBoundingClientRect(), e = p.m.at.e, cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  const dx = e === 'left' ? 1 : e === 'right' ? -1 : cx < innerWidth / 2 ? 1 : -1, dy = e === 'top' ? 1 : e === 'bottom' ? -1 : cy > innerHeight / 2 ? -1 : 1;
+  p.ring.querySelectorAll('.btn').forEach((b, i) => { const t = i / (p.n - 1) * Math.PI / 2; b.style.setProperty('--x', dx * Math.sin(t) * 96 + 'px'); b.style.setProperty('--y', dy * Math.cos(t) * 96 + 'px'); });
 }
-function makePuck(items, label) {
-  const p = el('div', 'puck'), core = el('button', 'core'), ring = el('div', 'ring'); pucks.push(p);
-  core.setAttribute('aria-label', label); core.title = label + ' (drag to move)';
+function makePuck(items, label, id, def) {
+  const p = el('div', 'mod puck'), core = el('button', 'core'), ring = el('div', 'ring'); pucks.push(p);
+  core.setAttribute('aria-label', label); core.title = label + ' (tap for tools, drag to move)';
   const open = () => { const o = p.classList.contains('open'); closeAll(); if (!o) { ringLayout(p); p.classList.add('open'); } };
-  drag(core, { move: (dx, dy) => { pops.forEach(q => q.classList.remove('on')); p.classList.remove('open'); place(p, p.pos[0] + dx, p.pos[1] + dy); }, end: savePos, tap: open });
   items.forEach(([n, t, f, k]) => { const b = btn(n, t, f, 'tool', t); b.dataset.t = k || ''; ring.append(b); });
-  p.append(ring, core); p.core = core; p.ring = ring; p.n = items.length; app.append(p); return p;
+  p.append(ring, core); p.core = core; p.ring = ring; p.n = items.length; app.append(p);
+  p.m = M[id] = mod(id, p, def); attach(p.m, core, { tap: open });
+  return p;
 }
 const pA = makePuck([
-  ['pen', 'Brushes', () => { S.tool = 'brush'; sync(); brushes(); toggle(bp); }, 'brush'],
+  ['pen', 'Brushes', () => { S.tool = 'brush'; sync(); brushes(); toggle(bp, M.tools); }, 'brush'],
   ['eraser', 'Eraser', () => { S.tool = 'eraser'; sync(); }, 'eraser'],
   ['fill', 'Fill', () => { S.tool = 'fill'; sync(); }, 'fill'],
-  ['color', 'Colour', () => toggle(cp)]], 'Tools');
+  ['color', 'Colour', () => toggle(cp, M.tools)]], 'Tools', 'tools', { e: 'bottom', t: 0 });
 
 function hex2hsv(x) { const n = parseInt(x.slice(1), 16), r = (n >> 16) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255, m = Math.max(r, g, b), d = m - Math.min(r, g, b); let h = 0; if (d) { h = m === r ? ((g - b) / d) % 6 : m === g ? (b - r) / d + 2 : (r - g) / d + 4; h *= 60; if (h < 0) h += 360; } return [h, m ? d / m : 0, m]; }
 function hsv2hex(h, s, v) { const f = n => { const k = (n + h / 60) % 6; return v - v * s * Math.max(0, Math.min(k, 4 - k, 1)); }; return '#' + [f(5), f(3), f(1)].map(t => Math.round(t * 255).toString(16).padStart(2, '0')).join(''); }
 function setColor(h) { S.color = h; S.hsv = hex2hsv(h); sync(); }
 /* Double puck: top drags size (left/right) and opacity (up/down); bottom drags saturation and brightness */
-drag(dp.querySelector('.grip'), { move: (dx, dy) => place(dp, dp.pos[0] + dx, dp.pos[1] + dy), end: savePos });
-drag(dp.querySelector('.dt'), { move: (dx, dy) => { setSize(S.size * Math.exp(dx * .012)); setOp(S.opacity - dy * .4); }, tap: () => { S.tool = 'brush'; sync(); brushes(); toggle(bp); } });
-drag(dp.querySelector('.db'), { move: (dx, dy) => { S.hsv[1] = clamp(S.hsv[1] + dx * .006, 0, 1); S.hsv[2] = clamp(S.hsv[2] - dy * .006, 0, 1); S.color = hsv2hex(...S.hsv); sync(); }, tap: () => toggle(cp) });
-const chip = btn('eye', 'Hide or show interface (H)', () => hideUi(), 'chip'); app.append(chip);
+drag(dp.querySelector('.dt'), { move: (dx, dy) => { setSize(S.size * Math.exp(dx * .012)); setOp(S.opacity - dy * .4); }, tap: () => { S.tool = 'brush'; sync(); brushes(); toggle(bp, M.dbl); } });
+drag(dp.querySelector('.db'), { move: (dx, dy) => { S.hsv[1] = clamp(S.hsv[1] + dx * .006, 0, 1); S.hsv[2] = clamp(S.hsv[2] - dy * .006, 0, 1); S.color = hsv2hex(...S.hsv); sync(); }, tap: () => toggle(cp, M.dbl) });
+const chip = btn('eye', 'Hide or show interface (H)', null, 'mod chip keep'); app.append(chip); M.chip = mod('chip', chip, { e: 'left', t: .5 }); attach(M.chip, chip, { tap: () => hideUi() });
 function hideUi() { const h = app.classList.toggle('nui'); chip.innerHTML = icon(h ? 'eyeoff' : 'eye'); }
 function sync() {
   pA.core.innerHTML = icon(S.tool === 'brush' ? 'pen' : S.tool);
@@ -348,12 +360,13 @@ const sl = el('label'), sv = el('span'), si = el('input'); si.type = 'range'; si
 sl.title = 'Smooths shaky lines. Higher is smoother but follows your hand more slowly'; const lbl = () => { sv.textContent = 'Line smoothing ' + S.stab + '%'; }; lbl(); si.oninput = () => { S.stab = +si.value; lbl(); }; sl.append(sv, si);
 const tgl = (label, get, set) => { const b = el('button', 'btn wide'); b.setAttribute('role', 'switch'); const u = () => { b.setAttribute('aria-checked', get()); b.textContent = `${label}: ${get() ? 'On' : 'Off'}`; }; b.onclick = () => { set(!get()); u(); }; u(); b.u = u; return b; };
 const setTheme = l => { S.theme = l ? 'light' : 'dark'; document.documentElement.dataset.theme = S.theme; };
-const setDbl = on => { S.dbl = on; app.classList.toggle('dbl', on); closeAll(); if (on) requestAnimationFrame(() => place(dp, ...dp.pos)); };
+const setDbl = on => { S.dbl = on; app.classList.toggle('dbl', on); closeAll(); };
+const rst = el('button', 'btn wide', 'Reset interface layout'); rst.onclick = () => { resetAll(); flash('Interface layout reset'); };
 const clr = el('button', 'btn wide', 'Clear layer');
 clr.onclick = () => { const L = cur(); if (L.lock) return flash('This layer is locked. Unlock it to clear it'); const before = L.ctx.getImageData(0, 0, W, H); L.ctx.clearRect(0, 0, W, H); push({ L, x: 0, y: 0, before, after: L.ctx.getImageData(0, 0, W, H) }); flash('Layer cleared. Undo brings it back'); };
 const fingerBtn = tgl('Finger drawing', () => S.touchDraw, v => { S.touchDraw = v; });
-sp.append(el('div', 'ph', '<b>Settings</b>'), sl, fingerBtn, tgl('Double puck', () => S.dbl, setDbl), tgl('Light interface', () => S.theme === 'light', setTheme), clr,
-  el('p', 'txt', '<b>Touch</b> pinch with two fingers to zoom and pan. Tap with two fingers to undo, three to redo.<br><b>Stylus</b> pressure and hover work. The pen’s eraser end erases where supported.<br><b>Keyboard</b> B brush, E eraser, G fill, M marker, I pick colour, [ ] size, H hide interface, Space pan, Esc close panels.'));
+sp.append(el('div', 'ph', '<b>Settings</b>'), sl, fingerBtn, tgl('Double puck', () => S.dbl, setDbl), tgl('Light interface', () => S.theme === 'light', setTheme), rst, clr,
+  el('p', 'txt', '<b>Touch</b> pinch with two fingers to zoom and pan. Tap with two fingers to undo, three to redo.<br><b>Stylus</b> pressure and hover work. The pen’s eraser end erases where supported.<br><b>Keyboard</b> B brush, E eraser, G fill, M marker, I pick colour, [ ] size, H hide interface, Space pan, Esc close panels.<br><b>Layout</b> drag a grip (or a puck) and drop it near a screen edge to dock and rotate it. Drop it anywhere else and it returns home.'));
 
 addEventListener('keydown', e => {
   const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey; if (k === 'escape') { closeAll(); return; }
@@ -369,7 +382,5 @@ addEventListener('beforeunload', e => { if (undo.length) e.preventDefault(); });
 
 addLayer('Background', true); addLayer('Sketch'); paintBg();
 setTheme(matchMedia('(prefers-color-scheme: light)').matches); S.hsv = hex2hsv(S.color);
-{ const v = LS('inkwell-pos'); place(pA, ...(v && v.a || [22, innerHeight - 92])); place(dp, ...(v && v.d || [innerWidth - 100, innerHeight - 130])); }
-addEventListener('resize', () => [pA, dp].forEach(q => place(q, ...q.pos)));
 sync(); fit();
 if (!LS('inkwell-seen')) { LS('inkwell-seen', 1); flash('Welcome to Inkwell. Tap the pen button to pick a tool and start drawing', 4000); }

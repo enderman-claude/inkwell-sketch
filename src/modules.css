@@ -1,0 +1,63 @@
+/* Module base: every movable piece of UI. `.v` means docked on the left or right edge (column layout). */
+.mod{position:absolute;z-index:4;display:flex;align-items:center;gap:4px;transition:left .16s ease,top .16s ease,opacity .15s}
+.mod.v{flex-direction:column}
+.mod.dragging{transition:opacity .15s;z-index:9;opacity:.92;box-shadow:0 8px 28px #0006}
+.mod.panel,.mod.bar{padding:3px;border-radius:var(--r)}
+.mod .btn{width:36px;height:36px}
+.mod .btn svg{width:20px;height:20px}
+
+/* Drag handle */
+.grip{flex:none;position:relative;width:16px;height:32px;border:0;background:none;padding:0;cursor:grab;touch-action:none;color:var(--mut)}
+.grip::after{content:"";position:absolute;left:50%;top:50%;width:4px;height:18px;margin:-9px 0 0 -2px;border-radius:2px;background:currentColor;opacity:.7}
+.mod.v .grip{width:32px;height:16px}
+.mod.v .grip::after{width:18px;height:4px;margin:-2px 0 0 -9px}
+.sep{flex:none;width:1px;height:22px;background:var(--line);margin:0 2px}
+.mod.v .sep{width:22px;height:1px;margin:2px 0}
+
+/* Shows which edge a dragged module will dock to */
+.edgehint{position:absolute;z-index:8;background:var(--acc);border-radius:2px;opacity:0;pointer-events:none;transition:opacity .12s}
+.edgehint.on{opacity:.9}
+.edgehint[data-e=top]{left:10px;right:10px;top:calc(2px + env(safe-area-inset-top,0px));height:3px}
+.edgehint[data-e=bottom]{left:10px;right:10px;bottom:calc(2px + env(safe-area-inset-bottom,0px));height:3px}
+.edgehint[data-e=left]{top:10px;bottom:10px;left:calc(2px + env(safe-area-inset-left,0px));width:3px}
+.edgehint[data-e=right]{top:10px;bottom:10px;right:calc(2px + env(safe-area-inset-right,0px));width:3px}
+
+/* Action bar: the one full-size module. Text labels only when it is horizontal and there is room. */
+.bar .lab{width:auto;min-width:36px;padding:0 8px;grid-auto-flow:column;gap:6px}
+.mod.v .lab{width:36px;padding:0}
+@media (min-width:760px){.bar:not(.v) .lb{display:inline;font-size:13px}}
+
+/* Brush size and opacity */
+.size{gap:6px}
+.size .prev{flex:none;width:34px;height:34px;display:grid;place-items:center}
+.size .sls{display:flex;gap:6px}
+.size.v .vs{width:34px;font-size:11px}
+.size.v .vs input{height:min(22vh,150px)}
+.size:not(.v) .sls{flex-direction:column;gap:2px}
+.size:not(.v) .vs{flex-direction:row;width:auto;gap:8px}
+.size:not(.v) .vs input{order:2;writing-mode:horizontal-tb;direction:ltr;width:104px;height:22px}
+.size:not(.v) .vs span:last-child{order:1;width:50px}
+.size:not(.v) .vs span:first-child{order:3;width:40px;text-align:right}
+
+/* Tool puck */
+.puck{display:block}
+.mod .ring .btn{left:-20px;top:-20px;width:40px;height:40px}
+.mod .ring .btn svg{width:20px;height:20px}
+.ring .lb{font-size:10px}
+
+/* Double puck: a row when docked top or bottom, a column on the sides */
+.dpuck{display:none;gap:0;height:50px;border-radius:25px;overflow:hidden;border:3px solid var(--c,#1b1b1f);background:var(--solid);box-shadow:0 6px 20px #0006}
+.dbl .dpuck{display:flex}
+.dbl .size{display:none}
+.dpuck.v{height:auto;width:50px}
+.dpuck button{flex:none;border:0;padding:0;cursor:pointer;touch-action:none;display:block}
+.dpuck .grip{width:16px;height:100%;background:var(--hov)}
+.dpuck.v .grip{width:100%;height:16px}
+.dpuck .dt{width:34px;height:100%;display:grid;place-items:center;background:var(--solid)}
+.dpuck .dt i{display:block;border-radius:50%;background:var(--c)}
+.dpuck .db{width:34px;height:100%;background:var(--c)}
+.dpuck.v .dt,.dpuck.v .db{width:100%;height:34px}
+
+/* Hide-interface button */
+.mod.chip{width:32px;height:32px;padding:0}
+.mod.chip svg{width:18px;height:18px}
