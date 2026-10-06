@@ -14,7 +14,7 @@ const BR = {
   airbrush: { n: 'Airbrush', s: 60, o: 30, b: 1.2, p: .3 },
   highlighter: { n: 'Highlighter', s: 34, o: 35, b: 0, p: 0 }
 };
-const S = { tool: 'brush', brush: 'pen', more: false, dbl: false, touchDraw: true, penSeen: false, hsv: [0, 0, .11], theme: 'dark', bg: { hex: '#000000', a: 0 }, color: '#1b1b1f', size: 8, opacity: 100, stab: 40, active: 1, v: { x: 0, y: 0, k: 1 } };
+const S = { tool: 'brush', brush: 'pen', more: false, dbl: false, touchDraw: true, penSeen: false, hsv: [0, 0, .11], theme: 'dark', bg: { hex: '#000000', hsv: [0, 0, 0], a: 0 }, color: '#1b1b1f', size: 8, opacity: 100, stab: 40, active: 1, v: { x: 0, y: 0, k: 1 } };
 const B = () => BR[S.brush];
 const layers = [], undo = [], redo = [];
 const cur = () => layers[S.active];
@@ -234,17 +234,17 @@ const pA = makePuck([
 
 function hex2hsv(x) { const n = parseInt(x.slice(1), 16), r = (n >> 16) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255, m = Math.max(r, g, b), d = m - Math.min(r, g, b); let h = 0; if (d) { h = m === r ? ((g - b) / d) % 6 : m === g ? (b - r) / d + 2 : (r - g) / d + 4; h *= 60; if (h < 0) h += 360; } return [h, m ? d / m : 0, m]; }
 function hsv2hex(h, s, v) { const f = n => { const k = (n + h / 60) % 6; return v - v * s * Math.max(0, Math.min(k, 4 - k, 1)); }; return '#' + [f(5), f(3), f(1)].map(t => Math.round(t * 255).toString(16).padStart(2, '0')).join(''); }
-function setColor(h) { S.color = h; S.hsv = hex2hsv(h); ci.value = h; sync(); }
+function setColor(h) { S.color = h; S.hsv = hex2hsv(h); sync(); }
 /* Double puck: top drags size (left/right) and opacity (up/down); bottom drags saturation and brightness */
 drag(dp.querySelector('.grip'), { move: (dx, dy) => place(dp, dp.pos[0] + dx, dp.pos[1] + dy), end: savePos });
 drag(dp.querySelector('.dt'), { move: (dx, dy) => { setSize(S.size * Math.exp(dx * .012)); setOp(S.opacity - dy * .4); }, tap: () => { S.tool = 'brush'; sync(); brushes(); toggle(bp); } });
-drag(dp.querySelector('.db'), { move: (dx, dy) => { S.hsv[1] = clamp(S.hsv[1] + dx * .006, 0, 1); S.hsv[2] = clamp(S.hsv[2] - dy * .006, 0, 1); S.color = hsv2hex(...S.hsv); ci.value = S.color; sync(); }, tap: () => toggle(cp) });
+drag(dp.querySelector('.db'), { move: (dx, dy) => { S.hsv[1] = clamp(S.hsv[1] + dx * .006, 0, 1); S.hsv[2] = clamp(S.hsv[2] - dy * .006, 0, 1); S.color = hsv2hex(...S.hsv); sync(); }, tap: () => toggle(cp) });
 const chip = btn('eye', 'Hide or show interface (H)', () => hideUi(), 'chip'); app.append(chip);
 function hideUi() { const h = app.classList.toggle('nui'); chip.innerHTML = icon(h ? 'eyeoff' : 'eye'); }
 function sync() {
   pA.core.innerHTML = icon(S.tool === 'brush' ? 'pen' : S.tool);
   pucks.forEach(p => p.style.setProperty('--c', S.color)); prev.style.setProperty('--c', S.color); dp.style.setProperty('--c', S.color);
-  pA.ring.querySelectorAll('.btn').forEach(b => b.classList.toggle('sel', b.dataset.t === S.tool)); preview(); if (bp.classList.contains('on')) brushes();
+  pA.ring.querySelectorAll('.btn').forEach(b => b.classList.toggle('sel', b.dataset.t === S.tool)); preview(); cpk.refresh(); if (bp.classList.contains('on')) brushes();
 }
 function pick(k) { S.brush = k; S.tool = 'brush'; setSize(BR[k].s); setOp(BR[k].o); sync(); }
 function brushes() {
@@ -257,22 +257,39 @@ function brushes() {
   const m = el('button', 'btn wide', S.more ? 'Show fewer' : 'More brushes'); m.onclick = () => { S.more = !S.more; brushes(); }; bp.append(m);
 }
 
-const ci = el('input'); ci.type = 'color'; ci.value = S.color; ci.setAttribute('aria-label', 'Colour'); ci.oninput = () => setColor(ci.value);
+function picker(m) {
+  const w = el('div', 'cpick'), sv = el('div', 'svb'), k = el('i'), hue = el('input'), hx = el('input');
+  hue.type = 'range'; hue.min = 0; hue.max = 360; hue.className = 'hue'; hue.setAttribute('aria-label', 'Hue');
+  hx.className = 'hx'; hx.maxLength = 7; hx.spellcheck = false; hx.setAttribute('aria-label', 'Hex colour');
+  sv.append(k); w.append(sv, hue, hx);
+  const draw = () => {
+    const [h, s, v] = m.g(); sv.style.background = `linear-gradient(to top,#000,#0000),linear-gradient(to right,#fff,hsl(${h},100%,50%))`;
+    k.style.left = s * 100 + '%'; k.style.top = (1 - v) * 100 + '%'; hue.value = h; if (document.activeElement !== hx) hx.value = hsv2hex(h, s, v);
+  };
+  const upd = e => { const r = sv.getBoundingClientRect(); m.s([m.g()[0], clamp((e.clientX - r.left) / r.width, 0, 1), 1 - clamp((e.clientY - r.top) / r.height, 0, 1)]); draw(); };
+  sv.onpointerdown = e => { sv.setPointerCapture(e.pointerId); sv.dragging = true; upd(e); };
+  sv.onpointermove = e => { if (sv.dragging) upd(e); };
+  sv.onpointerup = sv.onpointercancel = () => { sv.dragging = false; };
+  hue.oninput = () => { const [, s, v] = m.g(); m.s([+hue.value, s, v]); draw(); };
+  hx.oninput = () => { const t = hx.value.trim().replace(/^#?/, '#'); if (/^#[0-9a-f]{6}$/i.test(t)) { m.s(hex2hsv(t.toLowerCase())); draw(); } };
+  w.refresh = draw; draw(); return w;
+}
+const cpk = picker({ g: () => S.hsv, s: h => { S.hsv = h; S.color = hsv2hex(...h); sync(); } });
 const sw = el('div', 'sw'); SW.forEach(c => { const b = el('button'); b.style.setProperty('--c', c); b.setAttribute('aria-label', c); b.onclick = () => setColor(c); sw.append(b); });
-cp.append(ci, sw);
+cp.append(cpk, sw);
 
 function panel() {
   lp.replaceChildren(); const h = el('div', 'ph', '<b>Layers</b>'); h.append(btn('plus', 'Add layer', () => addLayer('Layer ' + layers.length), 'lab', 'Add')); lp.append(h);
   [...layers].reverse().forEach(L => {
     const i = layers.indexOf(L), r = el('div', 'lyr' + (i === S.active ? ' on' : '') + (L.bg ? ' bg' : '')), a = el('div', 'row'), b = el('div', 'row2');
     if (L.bg) {
-      const ci2 = el('input'), ai = el('input'), rd = el('span'), n = parseInt(S.bg.hex.slice(1), 16);
-      const show = () => { const m = parseInt(S.bg.hex.slice(1), 16); rd.textContent = `RGBA ${m >> 16}, ${(m >> 8) & 255}, ${m & 255}, ${S.bg.a}`; }; void n;
-      ci2.type = 'color'; ci2.value = S.bg.hex; ci2.setAttribute('aria-label', 'Background colour'); ci2.oninput = () => { S.bg.hex = ci2.value; paintBg(); show(); };
+      const sw2 = el('button', 'swatch'), ai = el('input'), rd = el('span');
+      const show = () => { const m = parseInt(S.bg.hex.slice(1), 16), c = `${m >> 16}, ${(m >> 8) & 255}, ${m & 255}`; rd.textContent = `RGBA ${c}, ${S.bg.a}`; sw2.style.setProperty('--sw', `rgba(${c},${S.bg.a})`); };
+      sw2.setAttribute('aria-label', 'Background colour'); const pk = picker({ g: () => S.bg.hsv, s: h => { S.bg.hsv = h; S.bg.hex = hsv2hex(...h); paintBg(); show(); } }); pk.hidden = true; sw2.onclick = () => { pk.hidden = !pk.hidden; };
       ai.type = 'range'; ai.min = 0; ai.max = 100; ai.value = S.bg.a * 100; ai.setAttribute('aria-label', 'Background alpha'); ai.oninput = () => { S.bg.a = +(ai.value / 100).toFixed(2); paintBg(); show(); };
       show(); const nm = el('span', 'nm', 'Background');
-      a.append(btn('lock', 'Fixed layer', () => flash('The background can’t be drawn on, moved or deleted')), nm, ci2); b.append(el('span', '', 'Alpha'), ai, rd);
-      r.append(a, b); lp.append(r); return;
+      a.append(btn('lock', 'Fixed layer', () => flash('The background can’t be drawn on, moved or deleted')), nm, sw2); b.append(el('span', '', 'Alpha'), ai, rd);
+      r.append(a, b, pk); lp.append(r); return;
     }
     const nm = el('span', 'nm'); nm.textContent = L.name; nm.title = 'Tap to select, double-tap to rename';
     nm.onclick = () => { S.active = i; stack(); panel(); };
