@@ -20,6 +20,8 @@ const P = {
   unlock: 'M7 11V8a5 5 0 019-3M6 11h12v9H6z',
   copy: 'M9 9h11v11H9zM5 15V4h11',
   menu: 'M4 8h16M4 16h16',
-  drop: 'M14 4l6 6-3 3-6-6zM11 7l-7 7v4h4l7-7'
+  drop: 'M14 4l6 6-3 3-6-6zM11 7l-7 7v4h4l7-7',
+  alpha: 'M4 4h16v16H4zM4 12h8V4M12 20h8v-8',
+  merge: 'M6 4v5a6 6 0 006 6 6 6 0 006-6V4M12 15v6M9 18l3 3 3-3'
 };
 export const icon = n => `<svg viewBox="0 0 24 24"><path d="${P[n]}"/></svg>`;

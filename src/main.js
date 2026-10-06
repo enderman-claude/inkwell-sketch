@@ -1,12 +1,12 @@
 import './style.css';
 import { icon } from './icons.js';
 import { mod, attach, hooks, resetAll, insets } from './modules.js';
+import { W, H, mk, layers, makeLayer, flatten, MODE } from './doc.js';
+import { push, undo, redo, patch, whole, hist, touch, canUndo } from './history.js';
 
-const W = 2048, H = 1536;
 const SW = ['#1b1b1f', '#ffffff', '#e5484d', '#f76b15', '#ffc53d', '#46a758', '#12a594', '#3e63dd', '#8e4ec6', '#d6409f', '#a18072', '#8b8d98'];
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
-const mk = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; return c; };
 const BR = {
   pen: { n: 'Pen', s: 8, o: 100, b: 0, p: .7 },
   ink: { n: 'Ink', s: 6, o: 100, b: 0, p: 1 },
@@ -17,7 +17,6 @@ const BR = {
 };
 const S = { tool: 'brush', brush: 'pen', more: false, dbl: false, touchDraw: true, penSeen: false, hsv: [0, 0, .11], theme: 'dark', bg: { hex: '#000000', hsv: [0, 0, 0], a: 0 }, color: '#1b1b1f', size: 8, opacity: 100, stab: 40, active: 1, v: { x: 0, y: 0, k: 1 } };
 const B = () => BR[S.brush];
-const layers = [], undo = [], redo = [];
 const cur = () => layers[S.active];
 
 const app = document.getElementById('app');
@@ -28,15 +27,23 @@ board.style.cssText = `width:${W}px;height:${H}px`;
 stage.append(board); app.append(stage);
 
 /* layers */
-function addLayer(name, bg) {
-  const c = mk(), ctx = c.getContext('2d');
-  const L = { c, ctx, name, show: true, op: 1, lock: false, mode: 'normal', bg };
-  layers.splice(bg ? 0 : S.active + 1, 0, L);
-  S.active = bg ? 1 : layers.indexOf(L); stack(); panel(); return L;
+function addLayer(name, bg, quiet) {
+  const L = makeLayer({ name, bg });
+  if (bg || quiet) { layers.splice(bg ? 0 : S.active + 1, 0, L); S.active = bg ? 1 : layers.indexOf(L); stack(); panel(); return L; }
+  return insertOp(L, S.active + 1);
+}
+/* Every layer operation below is one undo step: it has a do and an undo, both safe to run again */
+function insertOp(L, at) {
+  const was = S.active, doit = () => { layers.splice(at, 0, L); S.active = at; }, undoit = () => { layers.splice(layers.indexOf(L), 1); S.active = was; };
+  doit(); push({ n: 0, u: undoit, r: doit }); stack(); panel(); return L;
+}
+function setProp(L, k, v) {
+  const old = L[k]; if (old === v) return;
+  const set = x => { L[k] = x; }; set(v); push({ n: 0, u: () => set(old), r: () => set(v) }); stack(); panel();
 }
 function paintBg() {
   const L = layers[0], n = parseInt(S.bg.hex.slice(1), 16);
-  L.ctx.clearRect(0, 0, W, H); L.ctx.fillStyle = `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${S.bg.a})`; L.ctx.fillRect(0, 0, W, H);
+  L.ctx.clearRect(0, 0, W, H); L.ctx.fillStyle = `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${S.bg.a})`; L.ctx.fillRect(0, 0, W, H); L.dirty = true; touch();
 }
 function stack() {
   board.replaceChildren();
@@ -50,8 +57,8 @@ function pt(cx, cy) { const r = stage.getBoundingClientRect(); return [(cx - r.l
 function zoomAt(cx, cy, k) { const [x, y] = pt(cx, cy), r = stage.getBoundingClientRect(); k = clamp(k, .1, 16); S.v = { k, x: cx - r.left - x * k, y: cy - r.top - y * k }; apply(); }
 
 /* history */
-function push(s) { undo.push(s); if (undo.length > 40) undo.shift(); redo.length = 0; }
-function step(a, b) { const s = a.pop(); if (!s) return flash(a === undo ? 'Nothing to undo' : 'Nothing to redo'); s.L.ctx.putImageData(a === undo ? s.before : s.after, s.x, s.y); b.push(s); }
+const doUndo = () => { if (!undo()) flash('Nothing to undo'); }, doRedo = () => { if (!redo()) flash('Nothing to redo'); };
+hist.onchange = () => { S.active = clamp(S.active, 1, layers.length - 1); stack(); panel(); };
 
 /* drawing */
 const wid = p => { const k = B().p; return S.size * (1 - k + k * p); };
@@ -63,6 +70,7 @@ function begin(e) {
   const [x, y] = pt(e.clientX, e.clientY);
   curTool = e.pointerType === 'pen' && (e.buttons & 32) ? 'eraser' : S.tool;
   if (curTool === 'fill') return fill(L, x | 0, y | 0);
+  if (curTool === 'eraser' && L.alock) return flash('Alpha lock is on, so erasing is off. Turn it off in Layers to erase');
   const er = curTool === 'eraser', c = er ? L.ctx : sctx;
   c.lineCap = c.lineJoin = 'round'; c.strokeStyle = S.color;
   if (er) { pctx.clearRect(0, 0, W, H); pctx.drawImage(L.c, 0, 0); c.globalCompositeOperation = 'destination-out'; }
@@ -89,8 +97,8 @@ function end() {
   const w = clamp(Math.ceil(c + pad), 0, W) - x, h = clamp(Math.ceil(e + pad), 0, H) - y, er = curTool === 'eraser', L = d.L;
   if (w > 0 && h > 0) {
     const before = (er ? pctx : L.ctx).getImageData(x, y, w, h);
-    if (!er) { L.ctx.globalAlpha = S.opacity / 100; L.ctx.drawImage(stroke, 0, 0); L.ctx.globalAlpha = 1; }
-    push({ L, x, y, before, after: L.ctx.getImageData(x, y, w, h) });
+    if (!er) { L.ctx.globalAlpha = S.opacity / 100; if (L.alock) L.ctx.globalCompositeOperation = 'source-atop'; L.ctx.drawImage(stroke, 0, 0); L.ctx.globalCompositeOperation = 'source-over'; L.ctx.globalAlpha = 1; }
+    L.dirty = true; push(patch(L, x, y, before, L.ctx.getImageData(x, y, w, h)));
     if (!er) addRecent(S.color);
   }
   sctx.clearRect(0, 0, W, H); d.c.globalCompositeOperation = 'source-over'; d.c.shadowBlur = 0;
@@ -119,8 +127,8 @@ function fill(L, sx, sy) {
     if (x > 0) st.push(p - 1); if (x < W - 1) st.push(p + 1); if (y > 0) st.push(p - W); if (y < H - 1) st.push(p + W);
   }
   const w = x1 - x0 + 1, h = y1 - y0 + 1, before = L.ctx.getImageData(x0, y0, w, h);
-  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (seen[y * W + x]) d.set(col, (y * W + x) * 4);
-  L.ctx.putImageData(img, 0, 0); push({ L, x: x0, y: y0, before, after: L.ctx.getImageData(x0, y0, w, h) }); addRecent(S.color);
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (seen[y * W + x]) { const o = (y * W + x) * 4; if (!L.alock) d.set(col, o); else if (d[o + 3]) { d[o] = col[0]; d[o + 1] = col[1]; d[o + 2] = col[2]; } }
+  L.ctx.putImageData(img, 0, 0); L.dirty = true; push(patch(L, x0, y0, before, L.ctx.getImageData(x0, y0, w, h))); addRecent(S.color);
 }
 
 /* input: pen/mouse draw, one finger draws, two fingers pinch/pan, two-finger tap undo, three-finger tap redo */
@@ -162,7 +170,7 @@ stage.onpointerup = stage.onpointercancel = e => {
   if (e.pointerType === 'touch') {
     touches.delete(e.pointerId); if (touches.size < 2) g = null;
     if (!touches.size) {
-      if (tap && performance.now() - tap.t < 350 && tap.m < 12) { if (tap.n === 2) step(undo, redo); else if (tap.n === 3) step(redo, undo); }
+      if (tap && performance.now() - tap.t < 350 && tap.m < 12) { if (tap.n === 2) doUndo(); else if (tap.n === 3) doRedo(); }
       tap = null; locked = false;
     }
   }
@@ -195,7 +203,6 @@ function placePop(p) {
   if (e === 'top') y = r.bottom + g; else if (e === 'bottom') y = r.top - h - g; else if (e === 'left') x = r.right + g; else x = r.left - w - g;
   p.style.left = clamp(x, 6 + i.l, innerWidth - w - 6 - i.r) + 'px'; p.style.top = clamp(y, 6 + i.t, innerHeight - h - 6 - i.b) + 'px';
 }
-const MODE = m => m === 'normal' ? 'source-over' : m;
 function exportPng() {
   const c = mk(), x = c.getContext('2d');
   layers.forEach(L => { if (L.show) { x.globalAlpha = L.op; x.globalCompositeOperation = MODE(L.mode); x.drawImage(L.c, 0, 0); } });
@@ -209,7 +216,7 @@ hooks.lift = closeAll; hooks.move = m => pops.forEach(p => p.anc === m && placeP
 const M = {}, grip = label => { const g = el('button', 'grip'); g.title = 'Drag to move. Drop near a screen edge to dock it'; g.setAttribute('aria-label', label); return g; };
 
 const bar = el('header', 'mod bar'), barGrip = grip('Move toolbar');
-bar.append(barGrip, btn('undo', 'Undo (Ctrl+Z)', () => step(undo, redo), 'lab', 'Undo'), btn('redo', 'Redo (Ctrl+Shift+Z)', () => step(redo, undo), 'lab', 'Redo'), el('i', 'sep'),
+bar.append(barGrip, btn('undo', 'Undo (Ctrl+Z)', () => doUndo(), 'lab', 'Undo'), btn('redo', 'Redo (Ctrl+Shift+Z)', () => doRedo(), 'lab', 'Redo'), el('i', 'sep'),
   btn('layers', 'Layers', () => toggle(lp, M.bar), 'lab', 'Layers'), btn('tune', 'Settings', () => toggle(sp, M.bar), 'lab', 'Settings'), btn('fit', 'Fit to screen', fit, 'lab', 'Fit'), btn('download', 'Save as PNG', exportPng, 'lab', 'Save'));
 app.append(bar, lp, sp, cp, bp); M.bar = mod('bar', bar, { e: 'top', t: .5 }); attach(M.bar, barGrip);
 
@@ -341,20 +348,45 @@ function panel() {
     }
     const nm = el('span', 'nm'); nm.textContent = L.name; nm.title = 'Tap to select, double-tap to rename';
     nm.onclick = () => { S.active = i; stack(); panel(); };
-    nm.ondblclick = () => { const v = prompt('Layer name', L.name); if (v) { L.name = v.slice(0, 24); panel(); } };
-    a.append(btn(L.show ? 'eye' : 'eyeoff', L.show ? 'Hide layer' : 'Show layer', () => { L.show = !L.show; stack(); panel(); }), nm,
-      btn(L.lock ? 'lock' : 'unlock', L.lock ? 'Unlock layer' : 'Lock layer', () => { L.lock = !L.lock; panel(); }),
-      btn('copy', 'Duplicate layer', () => dup(L)), btn('up', 'Move layer up', () => shift(i, 1)), btn('down', 'Move layer down', () => shift(i, -1)), btn('trash', 'Delete layer', () => remove(i)));
-    const sel = el('select'), o = el('input'); sel.setAttribute('aria-label', 'Blend mode');
-    [['normal', 'Normal'], ['multiply', 'Multiply'], ['screen', 'Screen'], ['overlay', 'Overlay']].forEach(([v, t]) => { const op = el('option', '', t); op.value = v; sel.append(op); });
-    sel.value = L.mode; sel.onchange = () => { L.mode = sel.value; stack(); };
-    o.type = 'range'; o.min = 0; o.max = 100; o.value = L.op * 100; o.setAttribute('aria-label', 'Layer opacity'); o.oninput = () => { L.op = o.value / 100; L.c.style.opacity = L.op; };
-    b.append(sel, o); r.append(a, b); lp.append(r);
+    nm.ondblclick = () => { const v = prompt('Layer name', L.name); if (v && v.trim()) setProp(L, 'name', v.trim().slice(0, 24)); };
+    a.append(btn(L.show ? 'eye' : 'eyeoff', L.show ? 'Hide layer' : 'Show layer', () => setProp(L, 'show', !L.show)), nm,
+      btn(L.lock ? 'lock' : 'unlock', L.lock ? 'Unlock layer' : 'Lock layer', () => setProp(L, 'lock', !L.lock)),
+      btn('alpha', L.alock ? 'Alpha lock is on: paint only lands where there is already paint' : 'Alpha lock: paint only where there is already paint', () => setProp(L, 'alock', !L.alock), L.alock ? 'on' : ''));
+    r.append(a);
+    if (i === S.active) {
+      const sel = el('select'), o = el('input'), c = el('div', 'row acts'); sel.setAttribute('aria-label', 'Blend mode');
+      [['normal', 'Normal'], ['multiply', 'Multiply'], ['screen', 'Screen'], ['overlay', 'Overlay'], ['darken', 'Darken'], ['lighten', 'Lighten'], ['color-dodge', 'Dodge'], ['color-burn', 'Burn'], ['soft-light', 'Soft light'], ['difference', 'Difference']].forEach(([v, t]) => { const op = el('option', '', t); op.value = v; sel.append(op); });
+      sel.value = L.mode; sel.onchange = () => setProp(L, 'mode', sel.value);
+      let start = L.op; o.type = 'range'; o.min = 0; o.max = 100; o.value = L.op * 100; o.setAttribute('aria-label', 'Layer opacity');
+      o.oninput = () => { L.op = o.value / 100; L.c.style.opacity = L.op; };
+      o.onchange = () => { const from = start, to = L.op; start = to; if (from !== to) push({ n: 0, u: () => { L.op = from; }, r: () => { L.op = to; } }); };
+      b.append(sel, o);
+      c.append(btn('copy', 'Duplicate layer', () => dup(L)), btn('up', 'Move layer up', () => shift(i, 1)), btn('down', 'Move layer down', () => shift(i, -1)), btn('merge', 'Merge down into the layer below', () => mergeDown(i)), btn('trash', 'Delete layer', () => remove(i)));
+      r.append(b, c);
+    }
+    lp.append(r);
   });
 }
-function dup(L) { const n = addLayer(L.name + ' copy'); n.ctx.drawImage(L.c, 0, 0); n.op = L.op; n.mode = L.mode; stack(); panel(); }
-function shift(i, d) { const j = i + d; if (i < 1 || j < 1 || j >= layers.length) return; [layers[i], layers[j]] = [layers[j], layers[i]]; if (S.active === i) S.active = j; else if (S.active === j) S.active = i; stack(); panel(); }
-function remove(i) { if (layers.length < 3) return flash('You need at least one drawing layer'); layers.splice(i, 1); if (i <= S.active) S.active--; S.active = Math.max(1, S.active); stack(); panel(); }
+function dup(L) { const n = makeLayer({ name: L.name + ' copy', op: L.op, mode: L.mode, alock: L.alock }); n.ctx.drawImage(L.c, 0, 0); insertOp(n, layers.indexOf(L) + 1); }
+function shift(i, d) {
+  const j = i + d; if (i < 1 || j < 1 || j >= layers.length) return;
+  const a = layers[i], b = layers[j], was = S.active, swap = () => { const x = layers.indexOf(a), y = layers.indexOf(b); layers[x] = b; layers[y] = a; };
+  swap(); S.active = was === i ? j : was === j ? i : was; const now = S.active;
+  push({ n: 0, u: () => { swap(); S.active = was; }, r: () => { swap(); S.active = now; } }); stack(); panel();
+}
+function remove(i) {
+  if (layers.length < 3) return flash('You need at least one drawing layer');
+  const L = layers[i], was = S.active, doit = () => { layers.splice(layers.indexOf(L), 1); S.active = Math.max(1, was >= i ? was - 1 : was); }, undoit = () => { layers.splice(i, 0, L); S.active = was; };
+  doit(); push({ n: W * H * 4, u: undoit, r: doit }); stack(); panel();
+}
+function mergeDown(i) {
+  const L = layers[i], low = layers[i - 1]; if (!low || low.bg) return flash('There is no drawing layer below to merge into');
+  if (low.lock) return flash('The layer below is locked. Unlock it to merge');
+  const snap = mk(), was = S.active; snap.getContext('2d').drawImage(low.c, 0, 0);
+  const doit = () => { low.ctx.globalAlpha = L.op; low.ctx.globalCompositeOperation = MODE(L.mode); low.ctx.drawImage(L.c, 0, 0); low.ctx.globalAlpha = 1; low.ctx.globalCompositeOperation = 'source-over'; low.dirty = true; layers.splice(layers.indexOf(L), 1); S.active = layers.indexOf(low); };
+  const undoit = () => { low.ctx.clearRect(0, 0, W, H); low.ctx.drawImage(snap, 0, 0); low.dirty = true; layers.splice(layers.indexOf(low) + 1, 0, L); S.active = was; };
+  doit(); push({ n: W * H * 4, u: undoit, r: doit }); stack(); panel(); flash('Merged down. Undo splits them again');
+}
 
 const sl = el('label'), sv = el('span'), si = el('input'); si.type = 'range'; si.min = 0; si.max = 92; si.value = S.stab;
 sl.title = 'Smooths shaky lines. Higher is smoother but follows your hand more slowly'; const lbl = () => { sv.textContent = 'Line smoothing ' + S.stab + '%'; }; lbl(); si.oninput = () => { S.stab = +si.value; lbl(); }; sl.append(sv, si);
@@ -363,7 +395,7 @@ const setTheme = l => { S.theme = l ? 'light' : 'dark'; document.documentElement
 const setDbl = on => { S.dbl = on; app.classList.toggle('dbl', on); closeAll(); };
 const rst = el('button', 'btn wide', 'Reset interface layout'); rst.onclick = () => { resetAll(); flash('Interface layout reset'); };
 const clr = el('button', 'btn wide', 'Clear layer');
-clr.onclick = () => { const L = cur(); if (L.lock) return flash('This layer is locked. Unlock it to clear it'); const before = L.ctx.getImageData(0, 0, W, H); L.ctx.clearRect(0, 0, W, H); push({ L, x: 0, y: 0, before, after: L.ctx.getImageData(0, 0, W, H) }); flash('Layer cleared. Undo brings it back'); };
+clr.onclick = () => { const L = cur(); if (L.lock) return flash('This layer is locked. Unlock it to clear it'); const before = L.ctx.getImageData(0, 0, W, H); L.ctx.clearRect(0, 0, W, H); L.dirty = true; push(patch(L, 0, 0, before, L.ctx.getImageData(0, 0, W, H))); flash('Layer cleared. Undo brings it back'); };
 const fingerBtn = tgl('Finger drawing', () => S.touchDraw, v => { S.touchDraw = v; });
 sp.append(el('div', 'ph', '<b>Settings</b>'), sl, fingerBtn, tgl('Double puck', () => S.dbl, setDbl), tgl('Light interface', () => S.theme === 'light', setTheme), rst, clr,
   el('p', 'txt', '<b>Touch</b> pinch with two fingers to zoom and pan. Tap with two fingers to undo, three to redo.<br><b>Stylus</b> pressure and hover work. The pen’s eraser end erases where supported.<br><b>Keyboard</b> B brush, E eraser, G fill, M marker, I pick colour, [ ] size, H hide interface, Space pan, Esc close panels.<br><b>Layout</b> drag a grip (or a puck) and drop it near a screen edge to dock and rotate it. Drop it anywhere else and it returns home.'));
@@ -372,15 +404,15 @@ addEventListener('keydown', e => {
   const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey; if (k === 'escape') { closeAll(); return; }
   if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
   if (k === 'h' && !m) { hideUi(); return; }
-  if (m && k === 'z') { e.preventDefault(); e.shiftKey ? step(redo, undo) : step(undo, redo); }
-  else if (m && k === 'y') step(redo, undo);
+  if (m && k === 'z') { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); }
+  else if (m && k === 'y') doRedo();
   else if (k === ' ') { space = true; e.preventDefault(); }
   else if (!m) { const t = { b: 'brush', e: 'eraser', g: 'fill' }[k]; if (t) { S.tool = t; sync(); } if (k === 'm') pick('marker'); if (k === 'i') startPick(); if (k === '[') setSize(S.size - 2); if (k === ']') setSize(S.size + 2); }
 });
 addEventListener('keyup', e => { if (e.key === ' ') space = false; });
-addEventListener('beforeunload', e => { if (undo.length) e.preventDefault(); });
+addEventListener('beforeunload', e => { if (canUndo()) e.preventDefault(); });
 
-addLayer('Background', true); addLayer('Sketch'); paintBg();
+addLayer('Background', true); addLayer('Sketch', false, true); paintBg();
 setTheme(matchMedia('(prefers-color-scheme: light)').matches); S.hsv = hex2hsv(S.color);
 sync(); fit();
 if (!LS('inkwell-seen')) { LS('inkwell-seen', 1); flash('Welcome to Inkwell. Tap the pen button to pick a tool and start drawing', 4000); }

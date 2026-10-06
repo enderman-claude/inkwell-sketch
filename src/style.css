@@ -99,3 +99,5 @@ input[type=number]{-moz-appearance:textfield}
 .act .lb{display:inline;font-size:13px}
 .pal{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;min-height:6px}
 .pal button{aspect-ratio:1;border-radius:50%;border:2px solid #0004;background:var(--c);padding:0;cursor:pointer}
+.btn.on{background:#4c7dff55}
+.acts{justify-content:flex-end;padding:0 6px 4px}
