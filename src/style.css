@@ -1,0 +1,49 @@
+:root{--bg:#25272b;--panel:#1a1b1eee;--line:#34373d;--text:#ececef;--mut:#9b9ea8;--acc:#4c7dff;--r:14px;font:15px/1.3 "Avenir Next","Segoe UI",system-ui,sans-serif}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body,#app{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--text);overscroll-behavior:none;user-select:none;-webkit-user-select:none}
+.stage{position:absolute;inset:0;touch-action:none;cursor:crosshair}
+.board{position:absolute;left:0;top:0;transform-origin:0 0;box-shadow:0 10px 50px #0009}
+.board canvas{position:absolute;left:0;top:0}
+.stroke{pointer-events:none}
+.top{position:absolute;left:0;right:0;top:0;display:flex;justify-content:space-between;padding:max(8px,env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) 0 max(10px,env(safe-area-inset-left));pointer-events:none}
+.grp,.sls,.prev,.pop,.toast{background:var(--panel);border:1px solid var(--line);backdrop-filter:blur(12px)}
+.grp{display:flex;gap:4px;pointer-events:auto;border-radius:var(--r);padding:3px}
+.btn{width:40px;height:40px;display:grid;place-items:center;border:0;border-radius:10px;background:none;color:var(--text);cursor:pointer;padding:0}
+.btn:hover{background:#ffffff14}.btn:focus-visible,input:focus-visible{outline:2px solid var(--acc)}
+.btn svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.side{position:absolute;right:max(10px,env(safe-area-inset-right));top:68px;display:flex;flex-direction:column;align-items:flex-end;gap:10px}
+.prev{width:48px;height:48px;border-radius:12px;display:grid;place-items:center}
+.prev i{display:block;border-radius:50%;background:var(--c)}
+.sls{display:flex;gap:4px;border-radius:var(--r);padding:10px 6px}
+.vs{display:flex;flex-direction:column;align-items:center;gap:6px;font-size:12px;color:var(--mut);width:40px}
+.vs input{writing-mode:vertical-lr;direction:rtl;height:min(30vh,240px);width:28px;accent-color:var(--acc);margin:0}
+.puck{position:absolute;left:max(22px,env(safe-area-inset-left));bottom:max(22px,env(safe-area-inset-bottom));width:64px;height:64px}
+.core{position:relative;z-index:2;width:64px;height:64px;border-radius:50%;border:4px solid var(--c,#1b1b1f);background:#1a1b1e;color:var(--text);display:grid;place-items:center;box-shadow:0 6px 20px #0006;cursor:pointer;padding:0}
+.core svg{width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.ring{position:absolute;left:50%;top:50%}
+.ring .btn{position:absolute;left:-22px;top:-22px;width:44px;height:44px;border-radius:50%;background:#1a1b1e;border:1px solid var(--line);opacity:0;pointer-events:none;transform:translate(0,0) scale(.3);transition:transform .18s,opacity .18s}
+.open .ring .btn{opacity:1;pointer-events:auto;transform:translate(var(--x),var(--y)) scale(1)}
+.ring .btn.sel{background:var(--acc)}
+.pop{position:absolute;display:none;border-radius:var(--r);padding:12px;z-index:5}
+.pop.on{display:block}
+#lp{right:10px;top:64px;width:min(330px,calc(100vw - 20px));max-height:60vh;overflow:auto}
+#sp{right:10px;top:64px;width:min(290px,calc(100vw - 20px));display:none;gap:12px;flex-direction:column}
+#sp.on{display:flex}
+#cp{left:10px;bottom:190px;width:220px}
+@media (max-height:520px){#cp{left:200px;bottom:16px}}
+#cp input{width:100%;height:44px;border:0;background:none;padding:0}
+.sw{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:10px}
+.sw button{aspect-ratio:1;border-radius:50%;border:2px solid #0004;background:var(--c);cursor:pointer;padding:0}
+.ph{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.row{display:flex;align-items:center;gap:2px;border-radius:10px;padding:2px}
+.row.on{background:#4c7dff33}
+.nm{flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;padding:0 6px;cursor:pointer}
+.row input{width:60px;accent-color:var(--acc)}
+.row .btn{width:32px;height:32px}.row .btn svg{width:18px;height:18px}
+#sp label{display:flex;flex-direction:column;gap:6px;color:var(--mut)}
+#sp input{accent-color:var(--acc)}
+#sp .txt{color:var(--mut);font-size:13px;line-height:1.5;margin:0}
+.wide{width:auto;height:38px;padding:0 14px;border:1px solid var(--line)}
+.toast{position:absolute;left:50%;bottom:30px;transform:translateX(-50%);padding:8px 14px;border-radius:99px;pointer-events:none;opacity:0;transition:opacity .2s}
+.toast.on{opacity:1}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
