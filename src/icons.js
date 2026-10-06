@@ -19,6 +19,7 @@ const P = {
   lock: 'M7 11V8a5 5 0 0110 0v3M6 11h12v9H6z',
   unlock: 'M7 11V8a5 5 0 019-3M6 11h12v9H6z',
   copy: 'M9 9h11v11H9zM5 15V4h11',
-  menu: 'M4 8h16M4 16h16'
+  menu: 'M4 8h16M4 16h16',
+  drop: 'M14 4l6 6-3 3-6-6zM11 7l-7 7v4h4l7-7'
 };
 export const icon = n => `<svg viewBox="0 0 24 24"><path d="${P[n]}"/></svg>`;

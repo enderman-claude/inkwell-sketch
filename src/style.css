@@ -103,3 +103,18 @@ select{background:var(--solid);color:var(--text);border:1px solid var(--line);bo
 #cp .hx,.cpick .hx{width:100%;height:auto;padding:6px 8px;background:var(--solid);color:var(--text);border:1px solid var(--line);border-radius:8px;font:inherit;font-variant-numeric:tabular-nums}
 .swatch{width:34px;height:30px;border:2px solid var(--line);border-radius:8px;padding:0;cursor:pointer;background:linear-gradient(var(--sw),var(--sw)),repeating-conic-gradient(#ccc 0 25%,#fff 0 50%) 0 0/10px 10px}
 .lyr .cpick{padding:8px 6px 4px}
+
+#cp{max-height:70vh}#cp.on{display:grid;gap:10px}
+#cp small{color:var(--mut);font-size:12px;margin-bottom:-4px}
+.svb:focus-visible{outline:2px solid var(--acc)}
+.cpick .rgb{display:grid;grid-template-columns:2.2fr 1fr 1fr 1fr;gap:6px}
+.cpick .rgb .hx{min-width:0;padding:6px}
+input[type=number]{-moz-appearance:textfield}
+.cmp{display:grid;grid-template-columns:1fr 1fr;border-radius:10px;overflow:hidden;border:1px solid var(--line)}
+.cmp button{height:44px;border:0;background:var(--c);position:relative;cursor:pointer;padding:0}
+.cmp button::after{content:attr(data-l);position:absolute;left:8px;bottom:4px;font-size:11px;color:#fff;mix-blend-mode:difference}
+.act{display:flex;gap:8px}
+.act .btn{width:auto;flex:1;height:38px;padding:0 10px;grid-auto-flow:column;gap:6px;border:1px solid var(--line)}
+.act .lb{display:inline;font-size:13px}
+.pal{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;min-height:6px}
+.pal button{aspect-ratio:1;border-radius:50%;border:2px solid #0004;background:var(--c);padding:0;cursor:pointer}

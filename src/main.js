@@ -57,6 +57,7 @@ const wid = p => { const k = B().p; return S.size * (1 - k + k * p); };
 function seg(c, x0, y0, x1, y1, w) { c.lineWidth = w; c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1 + .01, y1); c.stroke(); }
 let draw = null, curTool = 'brush';
 function begin(e) {
+  if (S.picking || e.altKey) return pickAt(e);
   const L = cur(); if (!L.show) return flash('This layer is hidden'); if (L.lock) return flash('This layer is locked');
   const [x, y] = pt(e.clientX, e.clientY);
   curTool = e.pointerType === 'pen' && (e.buttons & 32) ? 'eraser' : S.tool;
@@ -89,12 +90,21 @@ function end() {
     const before = (er ? pctx : L.ctx).getImageData(x, y, w, h);
     if (!er) { L.ctx.globalAlpha = S.opacity / 100; L.ctx.drawImage(stroke, 0, 0); L.ctx.globalAlpha = 1; }
     push({ L, x, y, before, after: L.ctx.getImageData(x, y, w, h) });
+    if (!er) addRecent(S.color);
   }
   sctx.clearRect(0, 0, W, H); d.c.globalCompositeOperation = 'source-over'; d.c.shadowBlur = 0;
 }
 function cancel() {
   if (!draw) return; const d = draw; draw = null; app.classList.remove('drawing'); sctx.clearRect(0, 0, W, H);
   if (curTool === 'eraser') { d.c.globalCompositeOperation = 'source-over'; d.L.ctx.clearRect(0, 0, W, H); d.L.ctx.drawImage(pre, 0, 0); }
+}
+const sc = document.createElement('canvas'); sc.width = sc.height = 1; const sg = sc.getContext('2d', { willReadFrequently: true });
+function sample(x, y) {
+  x |= 0; y |= 0; if (x < 0 || y < 0 || x >= W || y >= H) return null;
+  sg.clearRect(0, 0, 1, 1);
+  layers.forEach(L => { if (L.show) { sg.globalAlpha = L.op; sg.globalCompositeOperation = MODE(L.mode); sg.drawImage(L.c, x, y, 1, 1, 0, 0, 1, 1); } });
+  sg.globalAlpha = 1; sg.globalCompositeOperation = 'source-over';
+  const d = sg.getImageData(0, 0, 1, 1).data; return d[3] ? '#' + [d[0], d[1], d[2]].map(c => c.toString(16).padStart(2, '0')).join('') : null;
 }
 function fill(L, sx, sy) {
   if (sx < 0 || sy < 0 || sx >= W || sy >= H) return;
@@ -109,7 +119,7 @@ function fill(L, sx, sy) {
   }
   const w = x1 - x0 + 1, h = y1 - y0 + 1, before = L.ctx.getImageData(x0, y0, w, h);
   for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (seen[y * W + x]) d.set(col, (y * W + x) * 4);
-  L.ctx.putImageData(img, 0, 0); push({ L, x: x0, y: y0, before, after: L.ctx.getImageData(x0, y0, w, h) });
+  L.ctx.putImageData(img, 0, 0); push({ L, x: x0, y: y0, before, after: L.ctx.getImageData(x0, y0, w, h) }); addRecent(S.color);
 }
 
 /* input: pen/mouse draw, one finger draws, two fingers pinch/pan, two-finger tap undo, three-finger tap redo */
@@ -172,7 +182,7 @@ stage.onwheel = e => { e.preventDefault(); zoomAt(e.clientX, e.clientY, S.v.k * 
 const btn = (n, t, f, c = '', lb = '') => { const b = el('button', 'btn ' + c, icon(n) + (lb ? `<span class="lb">${lb}</span>` : '')); b.title = t; b.setAttribute('aria-label', t); b.onclick = f; return b; };
 const toast = el('div', 'toast'); app.append(toast); let tt;
 function flash(m) { toast.textContent = m; toast.classList.add('on'); clearTimeout(tt); tt = setTimeout(() => toast.classList.remove('on'), 1800); }
-function toggle(p) { const was = p.classList.contains('on'); pops.forEach(q => q.classList.remove('on')); p.classList.toggle('on', !was); }
+function toggle(p) { const was = p.classList.contains('on'); pops.forEach(q => q.classList.remove('on')); p.classList.toggle('on', !was); if (p === cp && !was) { prevCol = S.color; old.style.setProperty('--c', prevCol); renderPal(); } }
 const MODE = m => m === 'normal' ? 'source-over' : m;
 function exportPng() {
   const c = mk(), x = c.getContext('2d');
@@ -244,7 +254,7 @@ function hideUi() { const h = app.classList.toggle('nui'); chip.innerHTML = icon
 function sync() {
   pA.core.innerHTML = icon(S.tool === 'brush' ? 'pen' : S.tool);
   pucks.forEach(p => p.style.setProperty('--c', S.color)); prev.style.setProperty('--c', S.color); dp.style.setProperty('--c', S.color);
-  pA.ring.querySelectorAll('.btn').forEach(b => b.classList.toggle('sel', b.dataset.t === S.tool)); preview(); cpk.refresh(); if (bp.classList.contains('on')) brushes();
+  pA.ring.querySelectorAll('.btn').forEach(b => b.classList.toggle('sel', b.dataset.t === S.tool)); preview(); cpk.refresh(); now.style.setProperty('--c', S.color); if (bp.classList.contains('on')) brushes();
 }
 function pick(k) { S.brush = k; S.tool = 'brush'; setSize(BR[k].s); setOp(BR[k].o); sync(); }
 function brushes() {
@@ -258,25 +268,51 @@ function brushes() {
 }
 
 function picker(m) {
-  const w = el('div', 'cpick'), sv = el('div', 'svb'), k = el('i'), hue = el('input'), hx = el('input');
+  const w = el('div', 'cpick'), sv = el('div', 'svb'), k = el('i'), hue = el('input'), row = el('div', 'rgb'), hx = el('input');
   hue.type = 'range'; hue.min = 0; hue.max = 360; hue.className = 'hue'; hue.setAttribute('aria-label', 'Hue');
   hx.className = 'hx'; hx.maxLength = 7; hx.spellcheck = false; hx.setAttribute('aria-label', 'Hex colour');
-  sv.append(k); w.append(sv, hue, hx);
+  const ch = ['Red', 'Green', 'Blue'].map(l => { const i = el('input', 'hx'); i.type = 'number'; i.min = 0; i.max = 255; i.setAttribute('aria-label', l); return i; });
+  sv.tabIndex = 0; sv.setAttribute('role', 'slider'); sv.setAttribute('aria-label', 'Saturation and brightness');
+  sv.append(k); row.append(hx, ...ch); w.append(sv, hue, row);
   const draw = () => {
-    const [h, s, v] = m.g(); sv.style.background = `linear-gradient(to top,#000,#0000),linear-gradient(to right,#fff,hsl(${h},100%,50%))`;
-    k.style.left = s * 100 + '%'; k.style.top = (1 - v) * 100 + '%'; hue.value = h; if (document.activeElement !== hx) hx.value = hsv2hex(h, s, v);
+    const [h, s, v] = m.g(), hex = hsv2hex(h, s, v), n = parseInt(hex.slice(1), 16);
+    sv.style.background = `linear-gradient(to top,#000,#0000),linear-gradient(to right,#fff,hsl(${h},100%,50%))`;
+    k.style.left = s * 100 + '%'; k.style.top = (1 - v) * 100 + '%'; hue.value = h;
+    if (document.activeElement !== hx) hx.value = hex;
+    [n >> 16, (n >> 8) & 255, n & 255].forEach((c, i) => { if (document.activeElement !== ch[i]) ch[i].value = c; });
   };
   const upd = e => { const r = sv.getBoundingClientRect(); m.s([m.g()[0], clamp((e.clientX - r.left) / r.width, 0, 1), 1 - clamp((e.clientY - r.top) / r.height, 0, 1)]); draw(); };
   sv.onpointerdown = e => { sv.setPointerCapture(e.pointerId); sv.dragging = true; upd(e); };
   sv.onpointermove = e => { if (sv.dragging) upd(e); };
   sv.onpointerup = sv.onpointercancel = () => { sv.dragging = false; };
+  sv.onkeydown = e => {
+    const st = e.shiftKey ? .1 : .01, [h, s, v] = m.g(), d = { ArrowLeft: [-st, 0], ArrowRight: [st, 0], ArrowUp: [0, st], ArrowDown: [0, -st] }[e.key];
+    if (!d) return; e.preventDefault(); m.s([h, clamp(s + d[0], 0, 1), clamp(v + d[1], 0, 1)]); draw();
+  };
   hue.oninput = () => { const [, s, v] = m.g(); m.s([+hue.value, s, v]); draw(); };
-  hx.oninput = () => { const t = hx.value.trim().replace(/^#?/, '#'); if (/^#[0-9a-f]{6}$/i.test(t)) { m.s(hex2hsv(t.toLowerCase())); draw(); } };
+  hx.oninput = () => {
+    let t = hx.value.trim().replace(/^#?/, '#'); if (/^#[0-9a-f]{3}$/i.test(t)) t = '#' + [...t.slice(1)].map(c => c + c).join('');
+    if (/^#[0-9a-f]{6}$/i.test(t)) { m.s(hex2hsv(t.toLowerCase())); draw(); }
+  };
+  ch.forEach(i => { i.oninput = () => { m.s(hex2hsv('#' + ch.map(x => clamp(Math.round(+x.value) || 0, 0, 255).toString(16).padStart(2, '0')).join(''))); draw(); }; });
   w.refresh = draw; draw(); return w;
 }
 const cpk = picker({ g: () => S.hsv, s: h => { S.hsv = h; S.color = hsv2hex(...h); sync(); } });
-const sw = el('div', 'sw'); SW.forEach(c => { const b = el('button'); b.style.setProperty('--c', c); b.setAttribute('aria-label', c); b.onclick = () => setColor(c); sw.append(b); });
-cp.append(cpk, sw);
+const recent = LS('inkwell-recent') || [], saved = LS('inkwell-saved') || [...SW];
+const rec = el('div', 'pal'), sav = el('div', 'pal'), now = el('button', 'now'), old = el('button', 'old'), cmp = el('div', 'cmp'), act = el('div', 'act');
+let prevCol = S.color; now.dataset.l = 'New'; old.dataset.l = 'Previous'; now.setAttribute('aria-label', 'New colour'); old.setAttribute('aria-label', 'Previous colour: tap to go back to it');
+old.onclick = () => setColor(prevCol); cmp.append(now, old);
+function swatches(box, list, remove) {
+  box.replaceChildren();
+  list.forEach(c => { const b = el('button'); b.style.setProperty('--c', c); b.title = c; b.setAttribute('aria-label', c); b.onclick = () => setColor(c); if (remove) b.oncontextmenu = e => { e.preventDefault(); remove(c); }; box.append(b); });
+}
+function renderPal() { swatches(rec, recent); swatches(sav, saved, c => { saved.splice(saved.indexOf(c), 1); LS('inkwell-saved', saved); renderPal(); flash('Removed ' + c); }); }
+function addRecent(c) { const i = recent.indexOf(c); if (i === 0) return; if (i > 0) recent.splice(i, 1); recent.unshift(c); recent.length = Math.min(recent.length, 12); LS('inkwell-recent', recent); }
+function saveCol() { if (saved.includes(S.color)) return flash('Already saved'); saved.push(S.color); LS('inkwell-saved', saved); renderPal(); flash('Saved ' + S.color); }
+function startPick() { closeAll(); S.picking = true; flash('Tap the canvas to pick a colour'); }
+function pickAt(e) { const [x, y] = pt(e.clientX, e.clientY), c = sample(x, y); S.picking = false; if (c) { setColor(c); flash('Picked ' + c); } else flash('Nothing there to pick'); }
+act.append(btn('drop', 'Pick colour from canvas (I)', startPick, '', 'Pick'), btn('plus', 'Save colour to palette', saveCol, '', 'Save'));
+cp.append(cpk, cmp, act, el('small', '', 'Recent'), rec, el('small', '', 'Saved. Right-click or long-press to remove'), sav);
 
 function panel() {
   lp.replaceChildren(); const h = el('div', 'ph', '<b>Layers</b>'); h.append(btn('plus', 'Add layer', () => addLayer('Layer ' + layers.length), 'lab', 'Add')); lp.append(h);
@@ -317,15 +353,16 @@ const clr = el('button', 'btn wide', 'Clear layer');
 clr.onclick = () => { const L = cur(); if (L.lock) return flash('This layer is locked'); const before = L.ctx.getImageData(0, 0, W, H); L.ctx.clearRect(0, 0, W, H); push({ L, x: 0, y: 0, before, after: L.ctx.getImageData(0, 0, W, H) }); };
 const fingerBtn = tgl('Finger drawing', () => S.touchDraw, v => { S.touchDraw = v; });
 sp.append(sl, fingerBtn, tgl('Double puck', () => S.dbl, setDbl), tgl('Light interface', () => S.theme === 'light', setTheme), clr,
-  el('p', 'txt', '<b>Two fingers</b> pinch, pan, tap to undo<br><b>Three fingers</b> tap to redo<br><b>Stylus</b> pressure and hover; pen eraser end erases where supported<br><b>Keys</b> B E G M tools, [ ] size, H hides UI, Space pans'));
+  el('p', 'txt', '<b>Two fingers</b> pinch, pan, tap to undo<br><b>Three fingers</b> tap to redo<br><b>Stylus</b> pressure and hover; pen eraser end erases where supported<br><b>Keys</b> B E G M tools, I picks colour, [ ] size, H hides UI, Esc closes panels, Space pans'));
 
 addEventListener('keydown', e => {
-  const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey; if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
+  const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey; if (k === 'escape') { closeAll(); return; }
+  if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
   if (k === 'h' && !m) { hideUi(); return; }
   if (m && k === 'z') { e.preventDefault(); e.shiftKey ? step(redo, undo) : step(undo, redo); }
   else if (m && k === 'y') step(redo, undo);
   else if (k === ' ') { space = true; e.preventDefault(); }
-  else if (!m) { const t = { b: 'brush', e: 'eraser', g: 'fill' }[k]; if (t) { S.tool = t; sync(); } if (k === 'm') pick('marker'); if (k === '[') setSize(S.size - 2); if (k === ']') setSize(S.size + 2); }
+  else if (!m) { const t = { b: 'brush', e: 'eraser', g: 'fill' }[k]; if (t) { S.tool = t; sync(); } if (k === 'm') pick('marker'); if (k === 'i') startPick(); if (k === '[') setSize(S.size - 2); if (k === ']') setSize(S.size + 2); }
 });
 addEventListener('keyup', e => { if (e.key === ' ') space = false; });
 addEventListener('beforeunload', e => { if (undo.length) e.preventDefault(); });
