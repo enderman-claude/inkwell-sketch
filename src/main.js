@@ -7,20 +7,13 @@ import * as XF from './xform.js';
 import { flood } from './flood.js';
 import { push, undo, redo, patch, hist, touch, canUndo, clearHistory } from './history.js';
 import * as IO from './io.js';
+import { BR, COL, SET, resolve, loadOv, allOv, getOv, setOv, resetOv, hasOv, line, stamp, preview as drawPrev } from './brush.js';
 
 const SW = ['#1b1b1f', '#ffffff', '#e5484d', '#f76b15', '#ffc53d', '#46a758', '#12a594', '#3e63dd', '#8e4ec6', '#d6409f', '#a18072', '#8b8d98'];
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
-const BR = {
-  pen: { n: 'Pen', s: 8, o: 100, b: 0, p: .7 },
-  ink: { n: 'Ink', s: 6, o: 100, b: 0, p: 1 },
-  marker: { n: 'Marker', s: 24, o: 70, b: .5, p: .2 },
-  pencil: { n: 'Pencil', s: 4, o: 75, b: .25, p: .5 },
-  airbrush: { n: 'Airbrush', s: 60, o: 30, b: 1.2, p: .3 },
-  highlighter: { n: 'Highlighter', s: 34, o: 35, b: 0, p: 0 }
-};
-const S = { tool: 'brush', brush: 'pen', more: false, dbl: false, touchDraw: true, penSeen: false, hsv: [0, 0, .11], theme: 'dark', bg: { hex: '#000000', hsv: [0, 0, 0], a: 0 }, color: '#1b1b1f', size: 8, opacity: 100, stab: 40, active: 1, tol: 32, fillAll: false, v: { x: 0, y: 0, k: 1, r: 0 } };
-const B = () => BR[S.brush];
+const S = { tool: 'brush', brush: 'pen', slots: [], slot: 0, lastB: 'pen', lastE: 'eraser', mem: {}, open: {}, dbl: false, touchDraw: true, penSeen: false, hsv: [0, 0, .11], theme: 'dark', bg: { hex: '#000000', hsv: [0, 0, 0], a: 0 }, color: '#1b1b1f', size: 8, opacity: 100, stab: 40, active: 1, tol: 32, fillAll: false, v: { x: 0, y: 0, k: 1, r: 0 } };
+const B = () => resolve(S.brush);
 const cur = () => layers[S.active];
 
 const app = document.getElementById('app');
@@ -92,7 +85,7 @@ const doUndo = () => { if (XF.active()) XF.commit(); if (!undo()) flash('Nothing
 hist.onchange = () => { S.active = clamp(S.active, 1, layers.length - 1); stack(); panel(); };
 
 /* drawing */
-const wid = p => { const k = B().p; return S.size * (1 - k + k * p); };
+const wid = d => d.size * (1 - d.b.p + d.b.p * d.p);
 /* symmetry: every stroke segment is repeated through these transforms (mirrors, or rotations around the centre) */
 const SYM = { mode: 'off', n: 6, cx: W / 2, cy: H / 2 };
 function symMats() {
@@ -100,11 +93,6 @@ function symMats() {
   if (mode === 'v') return [I, V]; if (mode === 'h') return [I, Hh]; if (mode === 'quad') return [I, V, Hh, VH];
   if (mode === 'radial') return Array.from({ length: n }, (_, i) => { const a = i * 2 * Math.PI / n, c = Math.cos(a), s = Math.sin(a); return [c, s, -s, c, cx - c * cx + s * cy, cy - s * cx - c * cy]; });
   return [I];
-}
-function seg(c, x0, y0, x1, y1, w) {
-  c.lineWidth = w;
-  for (const m of symMats()) { c.setTransform(...m); c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1 + .01, y1); c.stroke(); }
-  c.setTransform(1, 0, 0, 1, 0, 0);
 }
 let draw = null, curTool = 'brush', tdraw = null;
 function begin(e) {
@@ -119,11 +107,11 @@ function begin(e) {
   curTool = e.pointerType === 'pen' && (e.buttons & 32) ? 'eraser' : S.tool;
   if (curTool === 'fill') return fill(L, x | 0, y | 0);
   if (curTool === 'eraser' && L.alock) return flash('Alpha lock is on, so erasing is off. Turn it off in Layers to erase');
-  const er = curTool === 'eraser', c = er ? L.ctx : sctx;
+  const er = curTool === 'eraser', c = er ? L.ctx : sctx, b = er && !B().e ? resolve(S.lastE) : B();
   c.lineCap = c.lineJoin = 'round'; c.strokeStyle = S.color;
   if (er) { pctx.clearRect(0, 0, W, H); pctx.drawImage(L.c, 0, 0); c.globalCompositeOperation = 'destination-out'; }
-  else { sctx.clearRect(0, 0, W, H); stroke.style.opacity = S.opacity / 100; c.shadowBlur = S.size * B().b; c.shadowColor = S.color; }
-  draw = { L, c, x, y, tx: x, ty: y, sx: x, sy: y, ax: null, line: false, bb: [x, y, x, y], p: 1, n: 0, id: e.pointerId, pen: e.pointerType === 'pen' };
+  else { sctx.clearRect(0, 0, W, H); stroke.style.opacity = S.opacity / 100; c.shadowBlur = b.k === 'line' ? S.size * b.b : 0; c.shadowColor = S.color; }
+  draw = { L, c, b, size: S.size, col: er ? '#000000' : S.color, er, op: S.opacity / 100, mats: symMats, x, y, tx: x, ty: y, sx: x, sy: y, ax: null, line: false, bb: [x, y, x, y], p: 1, n: 0, id: e.pointerId, pen: e.pointerType === 'pen' };
   if (e.shiftKey && S.last) { draw.x = S.last[0]; draw.y = S.last[1]; draw.line = true; draw.bb = [draw.x, draw.y, draw.x, draw.y]; }   // Shift+click: straight line from the last stroke
   app.classList.add('drawing'); move(e);
 }
@@ -147,7 +135,7 @@ function move(e) {
 }
 function follow(f) {
   const d = draw, nx = d.x + (d.tx - d.x) * f, ny = d.y + (d.ty - d.y) * f;
-  seg(d.c, d.x, d.y, nx, ny, wid(d.p));
+  if (d.b.k === 'line') line(d.c, d.x, d.y, nx, ny, wid(d), symMats(), d.b); else stamp(d, d.x, d.y, nx, ny);
   const b = d.bb;
   for (const m of symMats()) for (const [x, y] of [[d.x, d.y], [nx, ny]]) { const X = m[0] * x + m[2] * y + m[4], Y = m[1] * x + m[3] * y + m[5]; b[0] = Math.min(b[0], X); b[1] = Math.min(b[1], Y); b[2] = Math.max(b[2], X); b[3] = Math.max(b[3], Y); }
   d.x = nx; d.y = ny;
@@ -156,7 +144,7 @@ function end() {
   const d = draw;
   for (let i = 0; i < 80 && Math.hypot(d.tx - d.x, d.ty - d.y) > .5; i++) follow(.25);
   draw = null; app.classList.remove('drawing'); S.last = [d.tx, d.ty];
-  const pad = S.size * (2 + B().b) + 8, [a, b, c, e] = d.bb, x = clamp(Math.floor(a - pad), 0, W), y = clamp(Math.floor(b - pad), 0, H);
+  const pad = S.size * (2 + d.b.b + 2 * d.b.sc) + 8, [a, b, c, e] = d.bb, x = clamp(Math.floor(a - pad), 0, W), y = clamp(Math.floor(b - pad), 0, H);
   const w = clamp(Math.ceil(c + pad), 0, W) - x, h = clamp(Math.ceil(e + pad), 0, H) - y, er = curTool === 'eraser', L = d.L;
   if (w > 0 && h > 0) {
     const before = (er ? pctx : L.ctx).getImageData(x, y, w, h);
@@ -294,6 +282,9 @@ const setSize = slider('Size', 1, 120, 'size', v => Math.round(v) + 'px', sls);
 const setOp = slider('Opacity', 1, 100, 'opacity', v => Math.round(v) + '%', sls);
 
 const LS = (k, v) => { try { return v === undefined ? JSON.parse(localStorage.getItem(k)) : localStorage.setItem(k, JSON.stringify(v)); } catch { return null; } };
+loadOv(LS('inkwell-brush-ov'));
+const savedSlots = LS('inkwell-slots');
+S.slots = Array.isArray(savedSlots) && savedSlots.length === 9 && savedSlots.every(k => BR[k]) ? savedSlots : ['pen', 'pencil', 'eraser', 'marker', 'airbrush', 'highlighter', 'brush', 'charcoal', 'softE'];
 function drag(node, o) {
   let d = null; node.style.touchAction = 'none';
   node.onpointerdown = e => { node.setPointerCapture(e.pointerId); d = { x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, m: false }; };
@@ -302,34 +293,34 @@ function drag(node, o) {
   node.onpointercancel = () => { d = null; };
   node.addEventListener('click', e => { if (e.detail === 0 && o.tap) o.tap(); });
 }
+/* quick menu: separate buttons set close together in rows, so the groups read as groups without merging */
 function ringLayout(p) {
   const r = p.getBoundingClientRect(), e = p.m.at.e, cx = r.left + r.width / 2, cy = r.top + r.height / 2;
   const dx = e === 'left' ? 1 : e === 'right' ? -1 : cx < innerWidth / 2 ? 1 : -1, dy = e === 'top' ? 1 : e === 'bottom' ? -1 : cy > innerHeight / 2 ? -1 : 1;
-  const R = p.n > 4 ? 128 : 96;
-  p.ring.querySelectorAll('.btn').forEach((b, i) => { const t = i / (p.n - 1) * Math.PI / 2; b.style.setProperty('--x', dx * Math.sin(t) * R + 'px'); b.style.setProperty('--y', dy * Math.cos(t) * R + 'px'); });
+  p.ring.querySelectorAll('.btn').forEach(b => { const [row, col] = b.dataset.g.split(',').map(Number); b.style.setProperty('--x', dx * col * 48 + 'px'); b.style.setProperty('--y', dy * (58 + row * 52) + 'px'); });
 }
 function makePuck(items, label, id, def) {
   const p = el('div', 'mod puck'), core = el('button', 'core'), ring = el('div', 'ring'); pucks.push(p);
   core.setAttribute('aria-label', label); core.title = label + ' (tap for tools, drag to move)';
   const open = () => { const o = p.classList.contains('open'); closeAll(); if (!o) { ringLayout(p); p.classList.add('open'); } };
-  items.forEach(([n, t, f, k]) => { const b = btn(n, t, f, 'tool', t); b.dataset.t = k || ''; ring.append(b); });
+  items.forEach(it => { if (it instanceof Node) return ring.append(it); const [n, t, f, k, g] = it, b = btn(n, t, f, 'tool', t); b.dataset.t = k || ''; b.dataset.g = g; ring.append(b); });
   p.append(ring, core); p.core = core; p.ring = ring; p.n = items.length; app.append(p);
   p.m = M[id] = mod(id, p, def); attach(p.m, core, { tap: open });
   return p;
 }
-const pA = makePuck([
-  ['pen', 'Brushes', () => { S.tool = 'brush'; sync(); brushes(); toggle(bp, M.tools); }, 'brush'],
-  ['eraser', 'Eraser', () => { S.tool = 'eraser'; sync(); }, 'eraser'],
-  ['fill', 'Fill', () => { S.tool = 'fill'; sync(); }, 'fill'],
-  ['select', 'Select', () => { S.tool = 'select'; sync(); }, 'select'],
-  ['move', 'Move', () => { S.tool = 'move'; sync(); }, 'move'],
-  ['color', 'Colour', () => toggle(cp, M.tools)]], 'Tools', 'tools', { e: 'bottom', t: 0 });
+const slotB = i => { const b = el('button', 'btn tool slotb'), cv = el('canvas'); cv.width = 30; cv.height = 30; b.dataset.slot = i; b.dataset.t = ''; b.dataset.g = '0,' + i; b.append(cv, el('b', '', i + 1)); b.onclick = () => pickSlot(i); return b; };
+const pA = makePuck([slotB(0), slotB(1), slotB(2),
+  ['fill', 'Fill', () => { S.tool = 'fill'; sync(); }, 'fill', '1,0'],
+  ['select', 'Select', () => { S.tool = 'select'; sync(); }, 'select', '1,1'],
+  ['move', 'Move', () => { S.tool = 'move'; sync(); }, 'move', '1,2'],
+  ['color', 'Colour', () => toggle(cp, M.tools), '', '2,0'],
+  ['brushes', 'All brushes', () => { useTool(); brushes(); toggle(bp, M.tools); }, '', '2,1']], 'Tools', 'tools', { e: 'bottom', t: 0 });
 
 function hex2hsv(x) { const n = parseInt(x.slice(1), 16), r = (n >> 16) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255, m = Math.max(r, g, b), d = m - Math.min(r, g, b); let h = 0; if (d) { h = m === r ? ((g - b) / d) % 6 : m === g ? (b - r) / d + 2 : (r - g) / d + 4; h *= 60; if (h < 0) h += 360; } return [h, m ? d / m : 0, m]; }
 function hsv2hex(h, s, v) { const f = n => { const k = (n + h / 60) % 6; return v - v * s * Math.max(0, Math.min(k, 4 - k, 1)); }; return '#' + [f(5), f(3), f(1)].map(t => Math.round(t * 255).toString(16).padStart(2, '0')).join(''); }
 function setColor(h) { S.color = h; S.hsv = hex2hsv(h); sync(); }
 /* Double puck: top drags size (left/right) and opacity (up/down); bottom drags saturation and brightness */
-drag(dp.querySelector('.dt'), { move: (dx, dy) => { setSize(S.size * Math.exp(dx * .012)); setOp(S.opacity - dy * .4); }, tap: () => { S.tool = 'brush'; sync(); brushes(); toggle(bp, M.dbl); } });
+drag(dp.querySelector('.dt'), { move: (dx, dy) => { setSize(S.size * Math.exp(dx * .012)); setOp(S.opacity - dy * .4); }, tap: () => { useTool(); brushes(); toggle(bp, M.dbl); } });
 drag(dp.querySelector('.db'), { move: (dx, dy) => { S.hsv[1] = clamp(S.hsv[1] + dx * .006, 0, 1); S.hsv[2] = clamp(S.hsv[2] - dy * .006, 0, 1); S.color = hsv2hex(...S.hsv); sync(); }, tap: () => toggle(cp, M.dbl) });
 const chip = btn('eye', 'Hide or show interface (H)', null, 'mod chip keep'); app.append(chip); M.chip = mod('chip', chip, { e: 'left', t: .5 }); attach(M.chip, chip, { tap: () => hideUi() });
 const vw = el('div', 'mod panel viewm'), vgrip = grip('Move view controls');
@@ -373,17 +364,66 @@ function sync() {
   app.dataset.tool = S.tool; if (S.tool !== 'move' && XF.active()) XF.commit();
   pA.core.innerHTML = icon(S.tool === 'brush' ? 'pen' : S.tool);
   pucks.forEach(p => p.style.setProperty('--c', S.color)); prev.style.setProperty('--c', S.color); dp.style.setProperty('--c', S.color);
-  pA.ring.querySelectorAll('.btn').forEach(b => b.classList.toggle('sel', b.dataset.t === S.tool)); preview(); cpk.refresh(); now.style.setProperty('--c', S.color); if (bp.classList.contains('on')) brushes();
+  pA.ring.querySelectorAll('.btn').forEach(b => b.classList.toggle('sel', b.dataset.t === S.tool)); slotRefresh(); preview(); cpk.refresh(); now.style.setProperty('--c', S.color); if (bp.classList.contains('on')) brushes();
 }
-function pick(k) { S.brush = k; S.tool = 'brush'; setSize(BR[k].s); setOp(BR[k].o); sync(); }
-function brushes() {
-  bp.replaceChildren(); bp.append(el('div', 'ph', '<b>Brushes</b>'));
-  Object.entries(BR).forEach(([k, b], i) => {
-    if (i >= 4 && !S.more) return;
-    const r = el('button', 'brush' + (S.brush === k && S.tool === 'brush' ? ' on' : ''), `<i style="--s:${Math.min(b.s, 26)}px;--o:${b.o / 100};filter:blur(${b.b * 2}px)"></i><span>${b.n}</span><small>${b.s}px</small>`);
-    r.onclick = () => pick(k); bp.append(r);
+const TXT = () => S.theme === 'light' ? '#1c1d21' : '#ececef';
+function paint(cv) {
+  const id = cv.dataset.b, b = resolve(id), cur = cv.dataset.z === 'cur';
+  drawPrev(cv, id, TXT(), cur ? clamp(S.size, 2, 26) : clamp(b.s, 2, cv.height * .3)); cv.style.opacity = Math.max(.45, (cur ? S.opacity : b.o) / 100);
+}
+const paintId = id => document.querySelectorAll('canvas[data-b]').forEach(cv => { if (cv.dataset.b === id) paint(cv); });
+function slotRefresh() {
+  pA.ring.querySelectorAll('.slotb').forEach(b => {
+    const i = +b.dataset.slot, id = S.slots[i], cv = b.firstChild, k = id + S.theme + JSON.stringify(getOv(id) || 0);
+    b.title = `Brush ${i + 1}: ${BR[id].n}`; b.setAttribute('aria-label', b.title);
+    if (cv._k !== k) { cv._k = k; cv.dataset.b = id; paint(cv); }
+    b.classList.toggle('sel', i === S.slot && id === S.brush && (S.tool === 'brush' || S.tool === 'eraser'));
   });
-  const m = el('button', 'btn wide', S.more ? 'Show fewer' : 'More brushes'); m.onclick = () => { S.more = !S.more; brushes(); }; bp.append(m);
+}
+/* choosing a brush: erasers are brushes too, so the tool follows the brush. Size and opacity are remembered per brush */
+function pick(k) {
+  const b = BR[k]; if (S.tool === 'brush' || S.tool === 'eraser') S.mem[S.brush] = [S.size, S.opacity];
+  S.brush = k; S.tool = b.e ? 'eraser' : 'brush'; if (b.e) S.lastE = k; else S.lastB = k;
+  if (S.slots[S.slot] !== k && S.slots.includes(k)) S.slot = S.slots.indexOf(k);
+  const m = S.mem[k] || [b.s, b.o]; setSize(m[0]); setOp(m[1]); sync();
+}
+const pickSlot = i => { S.slot = i; pick(S.slots[i]); };
+function useTool() { S.tool = BR[S.brush].e ? 'eraser' : 'brush'; sync(); }
+function row(lb, mn, mx, st, val, fmt, on) {
+  const w = el('label', 'srow'), i = el('input'), v = el('span'); i.type = 'range'; i.min = mn; i.max = mx; i.step = st; i.value = val;
+  const show = () => { v.textContent = fmt(+i.value); }; show();
+  i.oninput = () => { show(); on(+i.value); }; w.append(el('span', '', lb), i, v); return w;
+}
+const det = (id, title, sub) => { const d = el('details', 'bsec'), h = el('summary', '', title); if (sub) h.append(el('small', '', sub)); d.append(h); d.open = S.open[id] ?? true; d.ontoggle = () => { S.open[id] = d.open; }; return d; };
+/* full brush menu: nine slots, settings for the active brush, then every collection */
+function brushes() {
+  const keep = bp.scrollTop, id = S.brush, b = resolve(id), saveOv = () => { LS('inkwell-brush-ov', allOv()); paintId(id); slotRefresh(); };
+  bp.replaceChildren(); bp.append(el('div', 'ph', '<b>Brushes</b>'));
+  const sl = el('div', 'slots');
+  S.slots.forEach((k, i) => {
+    const t = el('button', 'slot' + (i === S.slot ? ' on' : '')), cv = el('canvas'); cv.width = 40; cv.height = 30; cv.dataset.b = k;
+    t.append(cv, el('b', '', i + 1)); t.title = `Brush ${i + 1}: ${BR[k].n}`; t.onclick = () => pickSlot(i); sl.append(t);
+  });
+  bp.append(sl, el('p', 'hint', `Slot ${S.slot + 1} is selected. Tap a brush below to put it there. Keys 1 to 9 pick a slot.`));
+  const sd = det('set', 'Settings', b.n), big = el('canvas', 'bigp'), box = el('div', 'srows'); big.width = 320; big.height = 60; big.dataset.b = id; big.dataset.z = 'cur';
+  box.append(row('Size', 1, 120, 1, S.size, v => Math.round(v) + 'px', v => { setSize(v); paintId(id); }), row('Opacity', 1, 100, 1, S.opacity, v => Math.round(v) + '%', v => { setOp(v); paint(big); }));
+  SET.forEach(([k, lb, mn, mx, st, f, ks]) => { if (!ks || ks.includes(b.k)) box.append(row(lb, mn, mx, st, b[k], f, v => { setOv(id, k, v); saveOv(); })); });
+  if (b.k === 'round' || b.k === 'square') {
+    const w = el('label', 'srow chk'), c = el('input'); c.type = 'checkbox'; c.checked = !!b.fd; c.onchange = () => { setOv(id, 'fd', c.checked ? 1 : 0); saveOv(); };
+    w.append(el('span', '', 'Follow stroke direction'), c); box.append(w);
+  }
+  const rs = el('button', 'btn wide', 'Reset this brush'); rs.disabled = !hasOv(id); rs.onclick = () => { resetOv(id); LS('inkwell-brush-ov', allOv()); slotRefresh(); brushes(); };
+  sd.append(big, box, rs); bp.append(sd);
+  COL.forEach(([cid, cn, info]) => {
+    const d = det(cid, cn, info), g = el('div', 'bgrid');
+    Object.keys(BR).filter(k => BR[k].c === cid).forEach(k => {
+      const r = el('button', 'bcard' + (S.brush === k ? ' on' : '')), cv = el('canvas'), at = S.slots.map((s, i) => s === k ? i + 1 : 0).filter(Boolean);
+      cv.width = 104; cv.height = 34; cv.dataset.b = k; r.append(cv, el('span', '', BR[k].n)); if (at.length) r.append(el('b', '', at.join(' ')));
+      r.title = BR[k].n + (at.length ? ' (in slot ' + at.join(', ') + ')' : ''); r.onclick = () => { S.slots[S.slot] = k; LS('inkwell-slots', S.slots); pick(k); }; g.append(r);
+    });
+    d.append(g); bp.append(d);
+  });
+  bp.scrollTop = keep; bp.querySelectorAll('canvas[data-b]').forEach(paint);
 }
 
 function picker(m) {
@@ -511,7 +551,7 @@ const clr = el('button', 'btn wide', 'Clear layer');
 clr.onclick = () => { const L = cur(); if (L.lock) return flash('This layer is locked. Unlock it to clear it'); const before = L.ctx.getImageData(0, 0, W, H); L.ctx.clearRect(0, 0, W, H); L.dirty = true; push(patch(L, 0, 0, before, L.ctx.getImageData(0, 0, W, H))); flash('Layer cleared. Undo brings it back'); };
 const fingerBtn = tgl('Finger drawing', () => S.touchDraw, v => { S.touchDraw = v; });
 sp.append(el('div', 'ph', '<b>Settings</b>'), sl, tolS, symB, symNL, symC, fingerBtn, allBtn, tgl('Double puck', () => S.dbl, setDbl), tgl('Light interface', () => S.theme === 'light', setTheme), rst, clr,
-  el('p', 'txt', '<b>Touch</b> pinch and twist with two fingers to zoom, pan and rotate the view. Tap with two fingers to undo, three to redo.<br><b>Stylus</b> pressure and hover work. The pen’s eraser end erases where supported.<br><b>Keyboard</b> B brush, E eraser, G fill, M marker, S select, V move, I pick colour, [ ] size, H hide interface, Space pan, 0 fit, 1 actual size, R rotate view, Esc close panels. Shift+click draws a straight line from your last stroke; Shift while dragging keeps it horizontal or vertical.<br><b>Selection</b> Shift adds and Alt subtracts. Ctrl+A all, Ctrl+D none, Ctrl+I invert, Delete clears, Ctrl+C and Ctrl+X copy and cut.<br><b>Layout</b> drag a grip (or a puck) and drop it near a screen edge to dock and rotate it. Drop it anywhere else and it returns home.'));
+  el('p', 'txt', '<b>Touch</b> pinch and twist with two fingers to zoom, pan and rotate the view. Tap with two fingers to undo, three to redo.<br><b>Stylus</b> pressure and hover work. The pen’s eraser end erases where supported.<br><b>Keyboard</b> 1 to 9 pick a brush slot, B last brush, E last eraser, G fill, M marker, S select, V move, I pick colour, [ ] size, H hide interface, Space pan, 0 fit, Z actual size, R rotate view, Esc close panels. Shift+click draws a straight line from your last stroke; Shift while dragging keeps it horizontal or vertical.<br><b>Selection</b> Shift adds and Alt subtracts. Ctrl+A all, Ctrl+D none, Ctrl+I invert, Delete clears, Ctrl+C and Ctrl+X copy and cut.<br><b>Layout</b> drag a grip (or a puck) and drop it near a screen edge to dock and rotate it. Drop it anywhere else and it returns home.'));
 
 /* files: autosave, project file, import, export (see io.js) */
 let autosaveOn = false;
@@ -570,7 +610,7 @@ addEventListener('keydown', e => {
   if (m && k === 'z') { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); }
   else if (m && k === 'y') doRedo();
   else if (k === ' ') { space = true; e.preventDefault(); }
-  else if (!m) { const t = { b: 'brush', e: 'eraser', g: 'fill', s: 'select', v: 'move' }[k]; if (t) { S.tool = t; sync(); } if (k === 'm') pick('marker'); if (k === '0') fit(); if (k === '1') zoom100(); if (k === 'r') rotateBy(e.shiftKey ? -ROT : ROT); if (k === 'i') startPick(); if (k === '[') setSize(S.size - 2); if (k === ']') setSize(S.size + 2); }
+  else if (!m) { const t = { g: 'fill', s: 'select', v: 'move' }[k]; if (t) { S.tool = t; sync(); } if (k === 'b') pick(S.lastB); if (k === 'e') pick(S.lastE); if (k === 'm') pick('marker'); if (/^[1-9]$/.test(k)) pickSlot(+k - 1); if (k === '0') fit(); if (k === 'z') zoom100(); if (k === 'r') rotateBy(e.shiftKey ? -ROT : ROT); if (k === 'i') startPick(); if (k === '[') setSize(S.size - 2); if (k === ']') setSize(S.size + 2); }
 });
 addEventListener('keyup', e => { if (e.key === ' ') space = false; });
 addEventListener('beforeunload', e => { if (IO.pending() || (IO.io.failed && canUndo())) e.preventDefault(); });
@@ -584,4 +624,4 @@ IO.recover().then(async s => {
   if (s && !canUndo()) { try { await applySnap(s); flash('Restored your last session', 2600); } catch { } }
   autosaveOn = true; if (s === null) fileStatus();
 });
-if (!LS('inkwell-seen')) { LS('inkwell-seen', 1); flash('Welcome to Inkwell. Tap the pen button to pick a tool and start drawing', 4000); }
+if (!LS('inkwell-seen')) { LS('inkwell-seen', 1); flash('Welcome to Inkwell. Tap the round button to open the quick tools and start drawing', 4000); }

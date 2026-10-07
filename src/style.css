@@ -50,7 +50,8 @@ html,body,#app{margin:0;height:100%;overflow:hidden;background:var(--bg);color:v
 .ph .lab{width:auto;padding:0 10px;grid-auto-flow:column;gap:6px}
 .ph .lab .lb{display:inline;font-size:13px}
 .ring .lb{display:block;position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:2px;font-size:11px;white-space:nowrap;text-shadow:0 0 4px var(--bg)}
-#cp,#bp{width:min(260px,calc(100vw - 20px));max-height:70vh;overflow:auto}
+#cp{width:min(260px,calc(100vw - 20px));max-height:70vh;overflow:auto}
+#bp{width:min(360px,calc(100vw - 20px));max-height:78vh;overflow:auto}
 .brush{display:grid;grid-template-columns:64px 1fr auto;align-items:center;gap:8px;width:100%;padding:8px;border:0;border-radius:10px;background:none;color:var(--text);text-align:left;cursor:pointer;font:inherit}
 .brush:hover{background:var(--hov)}.brush.on{background:#4c7dff33}
 .brush i{display:block;min-height:2px;height:var(--s);border-radius:99px;background:var(--text);opacity:var(--o)}
@@ -106,3 +107,29 @@ input[type=number]{-moz-appearance:textfield}
 .fx{display:flex;gap:6px}.fx .btn{flex:1;width:auto}
 .stat{color:var(--mut);line-height:1.35}
 #sp{max-height:70vh;overflow:auto}
+
+/* quick brush slots (tool cluster) and the full brush menu */
+.slotb canvas{width:28px;height:28px;pointer-events:none}
+.slotb b,.slot b{position:absolute;left:6px;top:3px;font-size:9px;font-weight:600;color:var(--mut);pointer-events:none}
+.ring .btn.sel b{color:#fffc}
+.slots{display:grid;grid-template-columns:repeat(9,1fr);gap:4px;margin-bottom:6px}
+.slot{position:relative;padding:0;aspect-ratio:1.15;border:1px solid var(--line);border-radius:9px;background:none;cursor:pointer;display:grid;place-items:center;color:var(--text)}
+.slot canvas{width:100%;height:auto;pointer-events:none}
+.slot.on{border-color:var(--acc);background:#4c7dff33}
+.hint{margin:0 0 8px;color:var(--mut);font-size:12px}
+.bsec{border-top:1px solid var(--line);padding:6px 0}
+.bsec summary{cursor:pointer;display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-weight:600;padding:4px 0}
+.bsec summary small{color:var(--mut);font-weight:400;font-size:12px;text-align:right}
+.bgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:6px}
+.bcard{position:relative;display:grid;gap:2px;padding:6px 4px 5px;border:1px solid var(--line);border-radius:10px;background:none;color:var(--text);cursor:pointer;font:inherit;font-size:12px;text-align:center}
+.bcard:hover{background:var(--hov)}.bcard.on{background:#4c7dff33;border-color:var(--acc)}
+.bcard canvas{width:100%;height:auto;pointer-events:none}
+.bcard b{position:absolute;right:5px;top:3px;font-size:9px;color:var(--mut)}
+.srows{display:grid;gap:2px;margin:6px 0}
+.srow{display:grid;grid-template-columns:104px 1fr 44px;align-items:center;gap:8px;font-size:13px}
+.srow input[type=range]{width:100%;min-width:0}
+.srow>span:last-child{text-align:right;color:var(--mut);font-variant-numeric:tabular-nums}
+.srow.chk{grid-template-columns:1fr auto}
+.bigp{display:block;width:100%;height:auto;border:1px solid var(--line);border-radius:10px;margin-top:6px}
+#bp .wide:disabled{opacity:.4;cursor:default}
+.puck .ring .lb{display:none}
