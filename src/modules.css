@@ -79,3 +79,6 @@
 .selpv .t{fill:#4c7dff22;stroke:#fff;stroke-width:1.5px;stroke-dasharray:6 4;vector-effect:non-scaling-stroke}
 [data-tool=select] .stage{cursor:crosshair}[data-tool=move] .stage{cursor:move}
 .nui .ants,.nui .selpv{display:none!important}
+.symg{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}
+.symg line{stroke:#4c7dff;stroke-width:1.5px;vector-effect:non-scaling-stroke;opacity:.55;stroke-dasharray:8 6}
+.nui .symg{display:none}

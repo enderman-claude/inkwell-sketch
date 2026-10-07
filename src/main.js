@@ -5,7 +5,7 @@ import { W, H, mk, layers, doc, makeLayer, flatten, MODE } from './doc.js';
 import * as SEL from './select.js';
 import * as XF from './xform.js';
 import { flood } from './flood.js';
-import { push, undo, redo, patch, whole, hist, touch, canUndo, clearHistory } from './history.js';
+import { push, undo, redo, patch, hist, touch, canUndo, clearHistory } from './history.js';
 import * as IO from './io.js';
 
 const SW = ['#1b1b1f', '#ffffff', '#e5484d', '#f76b15', '#ffc53d', '#46a758', '#12a594', '#3e63dd', '#8e4ec6', '#d6409f', '#a18072', '#8b8d98'];
@@ -39,6 +39,15 @@ function keepOutside(L) {
   L.ctx.globalCompositeOperation = 'destination-out'; L.ctx.drawImage(doc.sel, 0, 0); L.ctx.globalCompositeOperation = 'source-over'; L.ctx.drawImage(e, 0, 0);
 }
 
+/* symmetry guide lines, drawn on the board */
+const symSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); symSvg.setAttribute('class', 'symg'); symSvg.setAttribute('viewBox', `0 0 ${W} ${H}`); symSvg.style.cssText = `width:${W}px;height:${H}px`;
+function symGuide() {
+  const { mode, n, cx, cy } = SYM, L = (a, b, c, d) => `<line x1="${a}" y1="${b}" x2="${c}" y2="${d}"/>`; let h = '';
+  if (mode === 'v' || mode === 'quad') h += L(cx, -W, cx, H + W); if (mode === 'h' || mode === 'quad') h += L(-W, cy, W * 2, cy);
+  if (mode === 'radial') for (let i = 0; i < n; i++) { const a = i * 2 * Math.PI / n, dx = Math.cos(a) * 3000, dy = Math.sin(a) * 3000; h += L(cx, cy, cx + dx, cy + dy); }
+  symSvg.innerHTML = h;
+}
+
 /* layers */
 function addLayer(name, bg, quiet) {
   const L = makeLayer({ name, bg });
@@ -61,7 +70,7 @@ function paintBg() {
 function stack() {
   board.replaceChildren();
   layers.forEach((L, i) => { const s = L.c.style; s.opacity = L.op; s.display = L.show ? '' : 'none'; s.mixBlendMode = L.mode; board.append(L.c); if (i === S.active) board.append(stroke); });
-  board.append(...SEL.overlay);
+  board.append(...SEL.overlay, symSvg);
 }
 
 /* view: pan, zoom and rotate. Only the view changes; the artwork underneath is never rotated or resized */
@@ -84,9 +93,22 @@ hist.onchange = () => { S.active = clamp(S.active, 1, layers.length - 1); stack(
 
 /* drawing */
 const wid = p => { const k = B().p; return S.size * (1 - k + k * p); };
-function seg(c, x0, y0, x1, y1, w) { c.lineWidth = w; c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1 + .01, y1); c.stroke(); }
+/* symmetry: every stroke segment is repeated through these transforms (mirrors, or rotations around the centre) */
+const SYM = { mode: 'off', n: 6, cx: W / 2, cy: H / 2 };
+function symMats() {
+  const { mode, n, cx, cy } = SYM, I = [1, 0, 0, 1, 0, 0], V = [-1, 0, 0, 1, 2 * cx, 0], Hh = [1, 0, 0, -1, 0, 2 * cy], VH = [-1, 0, 0, -1, 2 * cx, 2 * cy];
+  if (mode === 'v') return [I, V]; if (mode === 'h') return [I, Hh]; if (mode === 'quad') return [I, V, Hh, VH];
+  if (mode === 'radial') return Array.from({ length: n }, (_, i) => { const a = i * 2 * Math.PI / n, c = Math.cos(a), s = Math.sin(a); return [c, s, -s, c, cx - c * cx + s * cy, cy - s * cx - c * cy]; });
+  return [I];
+}
+function seg(c, x0, y0, x1, y1, w) {
+  c.lineWidth = w;
+  for (const m of symMats()) { c.setTransform(...m); c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1 + .01, y1); c.stroke(); }
+  c.setTransform(1, 0, 0, 1, 0, 0);
+}
 let draw = null, curTool = 'brush', tdraw = null;
 function begin(e) {
+  if (S.setCentre) { [SYM.cx, SYM.cy] = pt(e.clientX, e.clientY); S.setCentre = false; symU(); return flash('Symmetry centre set'); }
   if (S.picking) return pickAt(e);
   if (S.tool === 'select') return toolStart(e, 'sel');
   if (XF.active()) XF.commit();
@@ -101,7 +123,8 @@ function begin(e) {
   c.lineCap = c.lineJoin = 'round'; c.strokeStyle = S.color;
   if (er) { pctx.clearRect(0, 0, W, H); pctx.drawImage(L.c, 0, 0); c.globalCompositeOperation = 'destination-out'; }
   else { sctx.clearRect(0, 0, W, H); stroke.style.opacity = S.opacity / 100; c.shadowBlur = S.size * B().b; c.shadowColor = S.color; }
-  draw = { L, c, x, y, tx: x, ty: y, bb: [x, y, x, y], p: 1, n: 0, id: e.pointerId, pen: e.pointerType === 'pen' };
+  draw = { L, c, x, y, tx: x, ty: y, sx: x, sy: y, ax: null, line: false, bb: [x, y, x, y], p: 1, n: 0, id: e.pointerId, pen: e.pointerType === 'pen' };
+  if (e.shiftKey && S.last) { draw.x = S.last[0]; draw.y = S.last[1]; draw.line = true; draw.bb = [draw.x, draw.y, draw.x, draw.y]; }   // Shift+click: straight line from the last stroke
   app.classList.add('drawing'); move(e);
 }
 /* select and move tools: pointer events go to select.js / xform.js */
@@ -115,18 +138,24 @@ function toolStart(e, kind) {
 function move(e) {
   const d = draw, [tx, ty] = pt(e.clientX, e.clientY);
   const r = e.pointerType === 'pen' ? Math.max(.05, e.pressure) ** .85 : 1; d.p = d.n++ ? d.p * .55 + r * .45 : r;
-  d.tx = tx; d.ty = ty; follow(1 - S.stab / 100);
+  d.tx = tx; d.ty = ty;
+  if (e.shiftKey && !d.line) {                    // Shift while dragging: keep to a horizontal or vertical line
+    if (!d.ax && Math.hypot(tx - d.sx, ty - d.sy) > 8) d.ax = Math.abs(tx - d.sx) > Math.abs(ty - d.sy) ? 'h' : 'v';
+    if (d.ax === 'h') d.ty = d.sy; else if (d.ax === 'v') d.tx = d.sx;
+  } else d.ax = null;
+  follow(1 - S.stab / 100);
 }
 function follow(f) {
   const d = draw, nx = d.x + (d.tx - d.x) * f, ny = d.y + (d.ty - d.y) * f;
   seg(d.c, d.x, d.y, nx, ny, wid(d.p));
-  const b = d.bb; b[0] = Math.min(b[0], d.x, nx); b[1] = Math.min(b[1], d.y, ny); b[2] = Math.max(b[2], d.x, nx); b[3] = Math.max(b[3], d.y, ny);
+  const b = d.bb;
+  for (const m of symMats()) for (const [x, y] of [[d.x, d.y], [nx, ny]]) { const X = m[0] * x + m[2] * y + m[4], Y = m[1] * x + m[3] * y + m[5]; b[0] = Math.min(b[0], X); b[1] = Math.min(b[1], Y); b[2] = Math.max(b[2], X); b[3] = Math.max(b[3], Y); }
   d.x = nx; d.y = ny;
 }
 function end() {
   const d = draw;
   for (let i = 0; i < 80 && Math.hypot(d.tx - d.x, d.ty - d.y) > .5; i++) follow(.25);
-  draw = null; app.classList.remove('drawing');
+  draw = null; app.classList.remove('drawing'); S.last = [d.tx, d.ty];
   const pad = S.size * (2 + B().b) + 8, [a, b, c, e] = d.bb, x = clamp(Math.floor(a - pad), 0, W), y = clamp(Math.floor(b - pad), 0, H);
   const w = clamp(Math.ceil(c + pad), 0, W) - x, h = clamp(Math.ceil(e + pad), 0, H) - y, er = curTool === 'eraser', L = d.L;
   if (w > 0 && h > 0) {
@@ -169,6 +198,7 @@ const pops = [], pucks = [];
 const closeAll = () => { pops.forEach(p => p.classList.remove('on')); pucks.forEach(p => p.classList.remove('open')); };
 stage.onpointerdown = e => {
   if (e.pointerType === 'touch' && draw && draw.pen) return;
+  if (e.ctrlKey || e.metaKey) return;          // shortcuts with the mouse never paint
   stage.setPointerCapture(e.pointerId); closeAll(); sawPen(e);
   if (e.pointerType === 'touch') {
     touches.set(e.pointerId, [e.clientX, e.clientY]);
@@ -467,12 +497,21 @@ const tolS = el('label'), tolV = el('span'), tolI = el('input'); tolI.type = 'ra
 tolS.title = 'How different a colour can be and still count as the same area, for the fill and magic wand tools';
 const tolL = () => { tolV.textContent = 'Fill and wand tolerance ' + S.tol; SEL.opts.tol = S.tol; }; tolL(); tolI.oninput = () => { S.tol = +tolI.value; tolL(); }; tolS.append(tolV, tolI);
 const allBtn = tgl('Fill and wand read all layers', () => S.fillAll, v => { S.fillAll = v; SEL.opts.all = v; });
+const SYMS = [['off', 'Off'], ['v', 'Mirror left and right'], ['h', 'Mirror top and bottom'], ['quad', 'Four-way mirror'], ['radial', 'Radial']];
+const symB = el('button', 'btn wide'), symNL = el('label'), symNV = el('span'), symNI = el('input'), symC = el('div', 'fx'), symSet = el('button', 'btn wide', 'Set centre'), symRes = el('button', 'btn wide', 'Centre it');
+symNI.type = 'range'; symNI.min = 2; symNI.max = 16; symNI.value = SYM.n; symNI.oninput = () => { SYM.n = +symNI.value; symU(); };
+symB.onclick = () => { SYM.mode = SYMS[(SYMS.findIndex(m => m[0] === SYM.mode) + 1) % SYMS.length][0]; symU(); };
+symSet.onclick = () => { closeAll(); S.setCentre = true; flash('Tap the canvas where the symmetry should centre'); };
+symRes.onclick = () => { SYM.cx = W / 2; SYM.cy = H / 2; symU(); };
+symNL.append(symNV, symNI); symC.append(symSet, symRes);
+function symU() { symB.textContent = 'Symmetry: ' + SYMS.find(m => m[0] === SYM.mode)[1]; symNV.textContent = 'Radial segments ' + SYM.n; symNL.hidden = SYM.mode !== 'radial'; symC.hidden = SYM.mode === 'off'; symGuide(); }
+symU();
 const rst = el('button', 'btn wide', 'Reset interface layout'); rst.onclick = () => { resetAll(); flash('Interface layout reset'); };
 const clr = el('button', 'btn wide', 'Clear layer');
 clr.onclick = () => { const L = cur(); if (L.lock) return flash('This layer is locked. Unlock it to clear it'); const before = L.ctx.getImageData(0, 0, W, H); L.ctx.clearRect(0, 0, W, H); L.dirty = true; push(patch(L, 0, 0, before, L.ctx.getImageData(0, 0, W, H))); flash('Layer cleared. Undo brings it back'); };
 const fingerBtn = tgl('Finger drawing', () => S.touchDraw, v => { S.touchDraw = v; });
-sp.append(el('div', 'ph', '<b>Settings</b>'), sl, tolS, fingerBtn, allBtn, tgl('Double puck', () => S.dbl, setDbl), tgl('Light interface', () => S.theme === 'light', setTheme), rst, clr,
-  el('p', 'txt', '<b>Touch</b> pinch and twist with two fingers to zoom, pan and rotate the view. Tap with two fingers to undo, three to redo.<br><b>Stylus</b> pressure and hover work. The pen’s eraser end erases where supported.<br><b>Keyboard</b> B brush, E eraser, G fill, M marker, S select, V move, I pick colour, [ ] size, H hide interface, Space pan, 0 fit, 1 actual size, R rotate view, Esc close panels.<br><b>Selection</b> Shift adds and Alt subtracts. Ctrl+A all, Ctrl+D none, Ctrl+I invert, Delete clears, Ctrl+C and Ctrl+X copy and cut.<br><b>Layout</b> drag a grip (or a puck) and drop it near a screen edge to dock and rotate it. Drop it anywhere else and it returns home.'));
+sp.append(el('div', 'ph', '<b>Settings</b>'), sl, tolS, symB, symNL, symC, fingerBtn, allBtn, tgl('Double puck', () => S.dbl, setDbl), tgl('Light interface', () => S.theme === 'light', setTheme), rst, clr,
+  el('p', 'txt', '<b>Touch</b> pinch and twist with two fingers to zoom, pan and rotate the view. Tap with two fingers to undo, three to redo.<br><b>Stylus</b> pressure and hover work. The pen’s eraser end erases where supported.<br><b>Keyboard</b> B brush, E eraser, G fill, M marker, S select, V move, I pick colour, [ ] size, H hide interface, Space pan, 0 fit, 1 actual size, R rotate view, Esc close panels. Shift+click draws a straight line from your last stroke; Shift while dragging keeps it horizontal or vertical.<br><b>Selection</b> Shift adds and Alt subtracts. Ctrl+A all, Ctrl+D none, Ctrl+I invert, Delete clears, Ctrl+C and Ctrl+X copy and cut.<br><b>Layout</b> drag a grip (or a puck) and drop it near a screen edge to dock and rotate it. Drop it anywhere else and it returns home.'));
 
 /* files: autosave, project file, import, export (see io.js) */
 let autosaveOn = false;
