@@ -61,3 +61,21 @@
 /* Hide-interface button */
 .mod.chip{width:32px;height:32px;padding:0}
 .mod.chip svg{width:18px;height:18px}
+
+/* Selection tools, transform controls and the selection outline */
+.selm,.xfm{display:none;flex-direction:column;align-items:stretch;gap:2px}
+[data-tool=select] .selm,.xf-on .xfm{display:flex}
+.selm .r,.xfm .r{display:flex;align-items:center;gap:2px}
+.mod.selm .grip,.mod.xfm .grip{width:16px;height:32px}
+.mod.selm .grip::after,.mod.xfm .grip::after{width:4px;height:18px;margin:-9px 0 0 -2px}
+.xs{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--mut);padding:0 6px 4px}
+.xs span:first-child{width:46px}.xs span:last-child{width:40px;text-align:right}
+.xs input{flex:1;min-width:120px;accent-color:var(--acc)}
+.btn.ok{color:#46a758}
+.ants{position:absolute;left:0;top:0;pointer-events:none;background:linear-gradient(45deg,#000 25%,#fff 25%,#fff 50%,#000 50%,#000 75%,#fff 75%);background-size:calc(12px/var(--k,1)) calc(12px/var(--k,1));animation:march .6s linear infinite}
+@keyframes march{to{background-position:calc(12px/var(--k,1)) 0}}
+.selpv{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}
+.selpv .u{fill:none;stroke:#000;stroke-width:3px;vector-effect:non-scaling-stroke;opacity:.55}
+.selpv .t{fill:#4c7dff22;stroke:#fff;stroke-width:1.5px;stroke-dasharray:6 4;vector-effect:non-scaling-stroke}
+[data-tool=select] .stage{cursor:crosshair}[data-tool=move] .stage{cursor:move}
+.nui .ants,.nui .selpv{display:none!important}

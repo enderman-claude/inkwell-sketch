@@ -1,7 +1,10 @@
 import './style.css';
 import { icon } from './icons.js';
 import { mod, attach, hooks, resetAll, insets } from './modules.js';
-import { W, H, mk, layers, makeLayer, flatten, MODE } from './doc.js';
+import { W, H, mk, layers, doc, makeLayer, flatten, MODE } from './doc.js';
+import * as SEL from './select.js';
+import * as XF from './xform.js';
+import { flood } from './flood.js';
 import { push, undo, redo, patch, whole, hist, touch, canUndo, clearHistory } from './history.js';
 import * as IO from './io.js';
 
@@ -16,7 +19,7 @@ const BR = {
   airbrush: { n: 'Airbrush', s: 60, o: 30, b: 1.2, p: .3 },
   highlighter: { n: 'Highlighter', s: 34, o: 35, b: 0, p: 0 }
 };
-const S = { tool: 'brush', brush: 'pen', more: false, dbl: false, touchDraw: true, penSeen: false, hsv: [0, 0, .11], theme: 'dark', bg: { hex: '#000000', hsv: [0, 0, 0], a: 0 }, color: '#1b1b1f', size: 8, opacity: 100, stab: 40, active: 1, v: { x: 0, y: 0, k: 1, r: 0 } };
+const S = { tool: 'brush', brush: 'pen', more: false, dbl: false, touchDraw: true, penSeen: false, hsv: [0, 0, .11], theme: 'dark', bg: { hex: '#000000', hsv: [0, 0, 0], a: 0 }, color: '#1b1b1f', size: 8, opacity: 100, stab: 40, active: 1, tol: 32, fillAll: false, v: { x: 0, y: 0, k: 1, r: 0 } };
 const B = () => BR[S.brush];
 const cur = () => layers[S.active];
 
@@ -26,6 +29,15 @@ const stroke = mk(), sctx = stroke.getContext('2d'); stroke.className = 'stroke'
 const pre = mk(), pctx = pre.getContext('2d');
 board.style.cssText = `width:${W}px;height:${H}px`;
 stage.append(board); app.append(stage);
+SEL.init({ stroke, k: () => S.v.k, layer: cur });
+const scr = mk(), scx = scr.getContext('2d');
+/* a copy of canvas c limited to the selection */
+function masked(c) { scx.globalCompositeOperation = 'source-over'; scx.clearRect(0, 0, W, H); scx.drawImage(c, 0, 0); scx.globalCompositeOperation = 'destination-in'; scx.drawImage(doc.sel, 0, 0); scx.globalCompositeOperation = 'source-over'; return scr; }
+/* after an erase stroke: put back everything outside the selection from the pre-stroke copy */
+function keepOutside(L) {
+  const e = masked(L.c); L.ctx.globalCompositeOperation = 'source-over'; L.ctx.clearRect(0, 0, W, H); L.ctx.drawImage(pre, 0, 0);
+  L.ctx.globalCompositeOperation = 'destination-out'; L.ctx.drawImage(doc.sel, 0, 0); L.ctx.globalCompositeOperation = 'source-over'; L.ctx.drawImage(e, 0, 0);
+}
 
 /* layers */
 function addLayer(name, bg, quiet) {
@@ -49,11 +61,12 @@ function paintBg() {
 function stack() {
   board.replaceChildren();
   layers.forEach((L, i) => { const s = L.c.style; s.opacity = L.op; s.display = L.show ? '' : 'none'; s.mixBlendMode = L.mode; board.append(L.c); if (i === S.active) board.append(stroke); });
+  board.append(...SEL.overlay);
 }
 
 /* view: pan, zoom and rotate. Only the view changes; the artwork underneath is never rotated or resized */
 const ROT = Math.PI / 12, norm = a => Math.atan2(Math.sin(a), Math.cos(a));
-const apply = () => { board.style.transform = `translate(${S.v.x}px,${S.v.y}px) rotate(${S.v.r}rad) scale(${S.v.k})`; board.style.setProperty('--k', S.v.k); };
+const apply = () => { board.style.transform = `translate(${S.v.x}px,${S.v.y}px) rotate(${S.v.r}rad) scale(${S.v.k})`; board.style.setProperty('--k', S.v.k); SEL.rezoom(); };
 function fit() { const r = stage.getBoundingClientRect(), k = Math.min(r.width / W, r.height / H) * .94; S.v = { k, r: 0, x: (r.width - W * k) / 2, y: (r.height - H * k) / 2 }; apply(); }
 /* screen point -> canvas point */
 function pt(cx, cy) { const r = stage.getBoundingClientRect(), v = S.v, dx = cx - r.left - v.x, dy = cy - r.top - v.y, c = Math.cos(v.r), s = Math.sin(v.r); return [(dx * c + dy * s) / v.k, (-dx * s + dy * c) / v.k]; }
@@ -66,15 +79,19 @@ const rotateTo = rot => { const [cx, cy] = mid(); anchor(pt(cx, cy), cx, cy, S.v
 const rotateBy = d => rotateTo(S.v.r + d), resetRot = () => rotateTo(0);
 
 /* history */
-const doUndo = () => { if (!undo()) flash('Nothing to undo'); }, doRedo = () => { if (!redo()) flash('Nothing to redo'); };
+const doUndo = () => { if (XF.active()) XF.commit(); if (!undo()) flash('Nothing to undo'); }, doRedo = () => { if (XF.active()) XF.commit(); if (!redo()) flash('Nothing to redo'); };
 hist.onchange = () => { S.active = clamp(S.active, 1, layers.length - 1); stack(); panel(); };
 
 /* drawing */
 const wid = p => { const k = B().p; return S.size * (1 - k + k * p); };
 function seg(c, x0, y0, x1, y1, w) { c.lineWidth = w; c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1 + .01, y1); c.stroke(); }
-let draw = null, curTool = 'brush';
+let draw = null, curTool = 'brush', tdraw = null;
 function begin(e) {
-  if (S.picking || e.altKey) return pickAt(e);
+  if (S.picking) return pickAt(e);
+  if (S.tool === 'select') return toolStart(e, 'sel');
+  if (XF.active()) XF.commit();
+  if (S.tool === 'move') return toolStart(e, 'move');
+  if (e.altKey) return pickAt(e);
   const L = cur(); if (!L.show) return flash('This layer is hidden. Show it to draw on it'); if (L.lock) return flash('This layer is locked. Unlock it to draw on it');
   const [x, y] = pt(e.clientX, e.clientY);
   curTool = e.pointerType === 'pen' && (e.buttons & 32) ? 'eraser' : S.tool;
@@ -86,6 +103,14 @@ function begin(e) {
   else { sctx.clearRect(0, 0, W, H); stroke.style.opacity = S.opacity / 100; c.shadowBlur = S.size * B().b; c.shadowColor = S.color; }
   draw = { L, c, x, y, tx: x, ty: y, bb: [x, y, x, y], p: 1, n: 0, id: e.pointerId, pen: e.pointerType === 'pen' };
   app.classList.add('drawing'); move(e);
+}
+/* select and move tools: pointer events go to select.js / xform.js */
+function toolStart(e, kind) {
+  const [x, y] = pt(e.clientX, e.clientY);
+  if (kind === 'sel') { tdraw = { id: e.pointerId, kind }; return SEL.down(x, y, e); }
+  const L = cur(); if (!L.show) return flash('This layer is hidden. Show it to move it'); if (L.lock) return flash('This layer is locked. Unlock it to move it');
+  if (!XF.begin(L)) return flash('Nothing to move here. Select something, or pick a layer that has paint on it');
+  tdraw = { id: e.pointerId, kind, last: [x, y] }; app.classList.add('drawing');
 }
 function move(e) {
   const d = draw, [tx, ty] = pt(e.clientX, e.clientY);
@@ -106,13 +131,15 @@ function end() {
   const w = clamp(Math.ceil(c + pad), 0, W) - x, h = clamp(Math.ceil(e + pad), 0, H) - y, er = curTool === 'eraser', L = d.L;
   if (w > 0 && h > 0) {
     const before = (er ? pctx : L.ctx).getImageData(x, y, w, h);
-    if (!er) { L.ctx.globalAlpha = S.opacity / 100; if (L.alock) L.ctx.globalCompositeOperation = 'source-atop'; L.ctx.drawImage(stroke, 0, 0); L.ctx.globalCompositeOperation = 'source-over'; L.ctx.globalAlpha = 1; }
+    if (!er) { L.ctx.globalAlpha = S.opacity / 100; if (L.alock) L.ctx.globalCompositeOperation = 'source-atop'; L.ctx.drawImage(doc.sel ? masked(stroke) : stroke, 0, 0); L.ctx.globalCompositeOperation = 'source-over'; L.ctx.globalAlpha = 1; }
+    else if (doc.sel) keepOutside(L);
     L.dirty = true; push(patch(L, x, y, before, L.ctx.getImageData(x, y, w, h)));
     if (!er) addRecent(S.color);
   }
   sctx.clearRect(0, 0, W, H); d.c.globalCompositeOperation = 'source-over'; d.c.shadowBlur = 0;
 }
 function cancel() {
+  if (tdraw) { if (tdraw.kind === 'sel') SEL.abortDrag(); tdraw = null; app.classList.remove('drawing'); }
   if (!draw) return; const d = draw; draw = null; app.classList.remove('drawing'); sctx.clearRect(0, 0, W, H);
   if (curTool === 'eraser') { d.c.globalCompositeOperation = 'source-over'; d.L.ctx.clearRect(0, 0, W, H); d.L.ctx.drawImage(pre, 0, 0); }
 }
@@ -126,15 +153,11 @@ function sample(x, y) {
 }
 function fill(L, sx, sy) {
   if (sx < 0 || sy < 0 || sx >= W || sy >= H) return;
-  const img = L.ctx.getImageData(0, 0, W, H), d = img.data, i0 = (sy * W + sx) * 4, t = [d[i0], d[i0 + 1], d[i0 + 2], d[i0 + 3]];
+  const md = doc.sel && doc.sel.getContext('2d').getImageData(0, 0, W, H).data;
+  if (md && md[(sy * W + sx) * 4 + 3] < 128) return flash('That spot is outside your selection');
+  const img = L.ctx.getImageData(0, 0, W, H), d = img.data, src = S.fillAll ? flatten().getContext('2d').getImageData(0, 0, W, H).data : d;
   const n = parseInt(S.color.slice(1), 16), col = [n >> 16, (n >> 8) & 255, n & 255, Math.round(S.opacity * 2.55)];
-  const seen = new Uint8Array(W * H), st = [sy * W + sx]; let x0 = sx, x1 = sx, y0 = sy, y1 = sy;
-  const ok = i => Math.abs(d[i] - t[0]) + Math.abs(d[i + 1] - t[1]) + Math.abs(d[i + 2] - t[2]) + Math.abs(d[i + 3] - t[3]) < 96;
-  while (st.length) {
-    const p = st.pop(); if (seen[p] || !ok(p * 4)) continue; seen[p] = 1;
-    const x = p % W, y = (p / W) | 0; x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
-    if (x > 0) st.push(p - 1); if (x < W - 1) st.push(p + 1); if (y > 0) st.push(p - W); if (y < H - 1) st.push(p + W);
-  }
+  const { seen, box } = flood(src, sx, sy, S.tol, md), [x0, y0, x1, y1] = box;
   const w = x1 - x0 + 1, h = y1 - y0 + 1, before = L.ctx.getImageData(x0, y0, w, h);
   for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (seen[y * W + x]) { const o = (y * W + x) * 4; if (!L.alock) d.set(col, o); else if (d[o + 3]) { d[o] = col[0]; d[o + 1] = col[1]; d[o + 2] = col[2]; } }
   L.ctx.putImageData(img, 0, 0); L.dirty = true; push(patch(L, x0, y0, before, L.ctx.getImageData(x0, y0, w, h))); addRecent(S.color);
@@ -173,6 +196,7 @@ stage.onpointermove = e => {
     }
   }
   if (pan) { S.v = { ...pan.v, x: pan.v.x + e.clientX - pan.x, y: pan.v.y + e.clientY - pan.y }; apply(); return; }
+  if (tdraw && e.pointerId === tdraw.id) { const [x, y] = pt(e.clientX, e.clientY); if (tdraw.kind === 'sel') SEL.move(x, y); else { XF.drag(x - tdraw.last[0], y - tdraw.last[1]); tdraw.last = [x, y]; } return; }
   if (draw && e.pointerId === draw.id) for (const c of (e.getCoalescedEvents?.() || [e])) move(c);
 };
 stage.onpointerup = stage.onpointercancel = e => {
@@ -184,11 +208,13 @@ stage.onpointerup = stage.onpointercancel = e => {
     }
   }
   pan = null; if (draw && draw.id === e.pointerId) end();
+  if (tdraw && tdraw.id === e.pointerId) { if (tdraw.kind === 'sel') SEL.up(); tdraw = null; app.classList.remove('drawing'); }
 };
 const ghost = el('div', 'ghost'); stage.append(ghost);
 function sawPen(e) { if (e.pointerType === 'pen' && !S.penSeen) { S.penSeen = true; if (S.touchDraw) { S.touchDraw = false; flash('Stylus detected. Fingers now pan and zoom; turn on Finger drawing in Settings to change this', 3200); fingerBtn.u(); } } }
 function hover(e) {
   if (e.pointerType === 'touch') return; sawPen(e);
+  if (S.tool === 'select' || S.tool === 'move') { ghost.style.display = 'none'; if (S.tool === 'select') SEL.hover(...pt(e.clientX, e.clientY)); return; }
   const r = stage.getBoundingClientRect(), z = Math.max(5, S.size * S.v.k);
   ghost.style.cssText = `display:block;width:${z}px;height:${z}px;transform:translate(${e.clientX - r.left - z / 2}px,${e.clientY - r.top - z / 2}px)`;
 }
@@ -249,7 +275,8 @@ function drag(node, o) {
 function ringLayout(p) {
   const r = p.getBoundingClientRect(), e = p.m.at.e, cx = r.left + r.width / 2, cy = r.top + r.height / 2;
   const dx = e === 'left' ? 1 : e === 'right' ? -1 : cx < innerWidth / 2 ? 1 : -1, dy = e === 'top' ? 1 : e === 'bottom' ? -1 : cy > innerHeight / 2 ? -1 : 1;
-  p.ring.querySelectorAll('.btn').forEach((b, i) => { const t = i / (p.n - 1) * Math.PI / 2; b.style.setProperty('--x', dx * Math.sin(t) * 96 + 'px'); b.style.setProperty('--y', dy * Math.cos(t) * 96 + 'px'); });
+  const R = p.n > 4 ? 128 : 96;
+  p.ring.querySelectorAll('.btn').forEach((b, i) => { const t = i / (p.n - 1) * Math.PI / 2; b.style.setProperty('--x', dx * Math.sin(t) * R + 'px'); b.style.setProperty('--y', dy * Math.cos(t) * R + 'px'); });
 }
 function makePuck(items, label, id, def) {
   const p = el('div', 'mod puck'), core = el('button', 'core'), ring = el('div', 'ring'); pucks.push(p);
@@ -264,6 +291,8 @@ const pA = makePuck([
   ['pen', 'Brushes', () => { S.tool = 'brush'; sync(); brushes(); toggle(bp, M.tools); }, 'brush'],
   ['eraser', 'Eraser', () => { S.tool = 'eraser'; sync(); }, 'eraser'],
   ['fill', 'Fill', () => { S.tool = 'fill'; sync(); }, 'fill'],
+  ['select', 'Select', () => { S.tool = 'select'; sync(); }, 'select'],
+  ['move', 'Move', () => { S.tool = 'move'; sync(); }, 'move'],
   ['color', 'Colour', () => toggle(cp, M.tools)]], 'Tools', 'tools', { e: 'bottom', t: 0 });
 
 function hex2hsv(x) { const n = parseInt(x.slice(1), 16), r = (n >> 16) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255, m = Math.max(r, g, b), d = m - Math.min(r, g, b); let h = 0; if (d) { h = m === r ? ((g - b) / d) % 6 : m === g ? (b - r) / d + 2 : (r - g) / d + 4; h *= 60; if (h < 0) h += 360; } return [h, m ? d / m : 0, m]; }
@@ -276,8 +305,42 @@ const chip = btn('eye', 'Hide or show interface (H)', null, 'mod chip keep'); ap
 const vw = el('div', 'mod panel viewm'), vgrip = grip('Move view controls');
 vw.append(vgrip, btn('fit', 'Fit to screen and reset rotation (0)', fit), btn('one', 'Zoom to 100% (1)', zoom100), btn('rotl', 'Rotate canvas left (Shift+R)', () => rotateBy(-ROT)), btn('rotr', 'Rotate canvas right (R)', () => rotateBy(ROT)), btn('north', 'Reset rotation', resetRot));
 app.append(vw); M.view = mod('view', vw, { e: 'bottom', t: .62 }); attach(M.view, vgrip);
+/* selection tools: shape, how a new selection combines with the old one, and whole-selection actions */
+const selm = el('div', 'mod panel selm'), selG = grip('Move selection tools'), sr1 = el('div', 'r'), sr2 = el('div', 'r'), sr3 = el('div', 'r'), shapeB = {}, modeB = {};
+const selSync = () => { for (const k in shapeB) shapeB[k].classList.toggle('on', SEL.opts.shape === k); for (const k in modeB) modeB[k].classList.toggle('on', SEL.opts.mode === k); };
+sr1.append(selG);
+[['rect', 'Rectangle'], ['ellipse', 'Ellipse'], ['lasso', 'Freehand'], ['poly', 'Polygon: tap points, then tap the first point or press Enter'], ['wand', 'Magic wand: select a similar colour']].forEach(([k, t]) => { shapeB[k] = btn('s' + k, t, () => { SEL.opts.shape = k; SEL.cancelDrag(); selSync(); }); sr1.append(shapeB[k]); });
+[['replace', 'New selection', 'snew'], ['add', 'Add to selection (Shift)', 'plus'], ['sub', 'Subtract from selection (Alt)', 'minus'], ['int', 'Intersect with selection', 'sint']].forEach(([k, t, ic]) => { modeB[k] = btn(ic, t, () => { SEL.opts.mode = k; selSync(); }); sr2.append(modeB[k]); });
+function clearSelected() {
+  const L = cur(), m = doc.sel; if (!m) return flash('Select something first'); if (L.lock || !L.show) return flash('This layer is locked or hidden');
+  const b = SEL.bounds(m); if (!b) return; const before = L.ctx.getImageData(b.x, b.y, b.w, b.h);
+  L.ctx.globalCompositeOperation = 'destination-out'; L.ctx.drawImage(m, 0, 0); L.ctx.globalCompositeOperation = 'source-over';
+  L.dirty = true; push(patch(L, b.x, b.y, before, L.ctx.getImageData(b.x, b.y, b.w, b.h)));
+}
+async function copySel(cut) {
+  const L = cur(), m = doc.sel, c = mk(), x = c.getContext('2d'); x.drawImage(L.c, 0, 0);
+  if (m) { x.globalCompositeOperation = 'destination-in'; x.drawImage(m, 0, 0); }
+  const b = SEL.bounds(c); if (!b) return flash('Nothing to copy there');
+  const o = mk(b.w, b.h); o.getContext('2d').drawImage(c, -b.x, -b.y);
+  try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': await new Promise(r => o.toBlob(r)) })]); flash(cut && m ? 'Cut' : 'Copied'); } catch { return flash('Your browser would not let me use the clipboard'); }
+  if (cut && m) clearSelected();
+}
+sr3.append(btn('sinv', 'Invert selection (Ctrl+I)', () => SEL.invert()), btn('sall', 'Select all (Ctrl+A)', () => SEL.all()), btn('snone', 'Deselect (Ctrl+D)', () => SEL.clear()),
+  btn('sfeather', 'Soften the selection edge', () => { if (!doc.sel) return flash('Select something first'); const v = +prompt('Soften the edge by how many pixels?', '8'); if (v > 0 && !SEL.feather(v)) flash('Your browser cannot soften edges'); }), btn('trash', 'Clear the selected pixels (Delete)', clearSelected));
+selm.append(sr1, sr2, sr3); app.append(selm); M.sel = mod('sel', selm, { e: 'left', t: .68 }); attach(M.sel, selG); selSync();
+
+/* transform controls: shown while a move is open */
+const xfm = el('div', 'mod panel xfm'), xg = grip('Move transform controls'), xr = el('div', 'r'), rotS = el('input'), scS = el('input'), rotV = el('span'), scV = el('span');
+rotS.type = scS.type = 'range'; rotS.min = -180; rotS.max = 180; scS.min = 10; scS.max = 400; rotS.setAttribute('aria-label', 'Rotate'); scS.setAttribute('aria-label', 'Scale');
+const xs = (t, i, v) => { const l = el('label', 'xs'); l.append(el('span', '', t), i, v); return l; };
+rotS.oninput = () => { XF.set({ rot: rotS.value * Math.PI / 180 }); rotV.textContent = rotS.value + '°'; };
+scS.oninput = () => { XF.set({ sc: scS.value / 100 }); scV.textContent = scS.value + '%'; };
+xr.append(xg, btn('flipx', 'Flip horizontally', () => XF.flip('h')), btn('flipy', 'Flip vertically', () => XF.flip('v')), btn('check', 'Apply (Enter)', () => XF.commit(), 'ok'), btn('close', 'Cancel (Esc)', () => XF.cancel()));
+xfm.append(xr, xs('Rotate', rotS, rotV), xs('Scale', scS, scV)); app.append(xfm); M.xf = mod('xf', xfm, { e: 'left', t: .68 }); attach(M.xf, xg);
+XF.xf.onchange = on => { app.classList.toggle('xf-on', on); if (on) { rotS.value = 0; scS.value = 100; rotV.textContent = '0°'; scV.textContent = '100%'; } };
 function hideUi() { const h = app.classList.toggle('nui'); chip.innerHTML = icon(h ? 'eyeoff' : 'eye'); }
 function sync() {
+  app.dataset.tool = S.tool; if (S.tool !== 'move' && XF.active()) XF.commit();
   pA.core.innerHTML = icon(S.tool === 'brush' ? 'pen' : S.tool);
   pucks.forEach(p => p.style.setProperty('--c', S.color)); prev.style.setProperty('--c', S.color); dp.style.setProperty('--c', S.color);
   pA.ring.querySelectorAll('.btn').forEach(b => b.classList.toggle('sel', b.dataset.t === S.tool)); preview(); cpk.refresh(); now.style.setProperty('--c', S.color); if (bp.classList.contains('on')) brushes();
@@ -354,7 +417,7 @@ function panel() {
       r.append(a, b, pk); lp.append(r); return;
     }
     const nm = el('span', 'nm'); nm.textContent = L.name; nm.title = 'Tap to select, double-tap to rename';
-    nm.onclick = () => { S.active = i; stack(); panel(); };
+    nm.onclick = () => { XF.commit(); S.active = i; stack(); panel(); };
     nm.ondblclick = () => { const v = prompt('Layer name', L.name); if (v && v.trim()) setProp(L, 'name', v.trim().slice(0, 24)); };
     a.append(btn(L.show ? 'eye' : 'eyeoff', L.show ? 'Hide layer' : 'Show layer', () => setProp(L, 'show', !L.show)), nm,
       btn(L.lock ? 'lock' : 'unlock', L.lock ? 'Unlock layer' : 'Lock layer', () => setProp(L, 'lock', !L.lock)),
@@ -400,12 +463,16 @@ sl.title = 'Smooths shaky lines. Higher is smoother but follows your hand more s
 const tgl = (label, get, set) => { const b = el('button', 'btn wide'); b.setAttribute('role', 'switch'); const u = () => { b.setAttribute('aria-checked', get()); b.textContent = `${label}: ${get() ? 'On' : 'Off'}`; }; b.onclick = () => { set(!get()); u(); }; u(); b.u = u; return b; };
 const setTheme = l => { S.theme = l ? 'light' : 'dark'; document.documentElement.dataset.theme = S.theme; };
 const setDbl = on => { S.dbl = on; app.classList.toggle('dbl', on); closeAll(); };
+const tolS = el('label'), tolV = el('span'), tolI = el('input'); tolI.type = 'range'; tolI.min = 0; tolI.max = 128; tolI.value = S.tol;
+tolS.title = 'How different a colour can be and still count as the same area, for the fill and magic wand tools';
+const tolL = () => { tolV.textContent = 'Fill and wand tolerance ' + S.tol; SEL.opts.tol = S.tol; }; tolL(); tolI.oninput = () => { S.tol = +tolI.value; tolL(); }; tolS.append(tolV, tolI);
+const allBtn = tgl('Fill and wand read all layers', () => S.fillAll, v => { S.fillAll = v; SEL.opts.all = v; });
 const rst = el('button', 'btn wide', 'Reset interface layout'); rst.onclick = () => { resetAll(); flash('Interface layout reset'); };
 const clr = el('button', 'btn wide', 'Clear layer');
 clr.onclick = () => { const L = cur(); if (L.lock) return flash('This layer is locked. Unlock it to clear it'); const before = L.ctx.getImageData(0, 0, W, H); L.ctx.clearRect(0, 0, W, H); L.dirty = true; push(patch(L, 0, 0, before, L.ctx.getImageData(0, 0, W, H))); flash('Layer cleared. Undo brings it back'); };
 const fingerBtn = tgl('Finger drawing', () => S.touchDraw, v => { S.touchDraw = v; });
-sp.append(el('div', 'ph', '<b>Settings</b>'), sl, fingerBtn, tgl('Double puck', () => S.dbl, setDbl), tgl('Light interface', () => S.theme === 'light', setTheme), rst, clr,
-  el('p', 'txt', '<b>Touch</b> pinch and twist with two fingers to zoom, pan and rotate the view. Tap with two fingers to undo, three to redo.<br><b>Stylus</b> pressure and hover work. The pen’s eraser end erases where supported.<br><b>Keyboard</b> B brush, E eraser, G fill, M marker, I pick colour, [ ] size, H hide interface, Space pan, 0 fit, 1 actual size, R rotate view, Esc close panels.<br><b>Layout</b> drag a grip (or a puck) and drop it near a screen edge to dock and rotate it. Drop it anywhere else and it returns home.'));
+sp.append(el('div', 'ph', '<b>Settings</b>'), sl, tolS, fingerBtn, allBtn, tgl('Double puck', () => S.dbl, setDbl), tgl('Light interface', () => S.theme === 'light', setTheme), rst, clr,
+  el('p', 'txt', '<b>Touch</b> pinch and twist with two fingers to zoom, pan and rotate the view. Tap with two fingers to undo, three to redo.<br><b>Stylus</b> pressure and hover work. The pen’s eraser end erases where supported.<br><b>Keyboard</b> B brush, E eraser, G fill, M marker, S select, V move, I pick colour, [ ] size, H hide interface, Space pan, 0 fit, 1 actual size, R rotate view, Esc close panels.<br><b>Selection</b> Shift adds and Alt subtracts. Ctrl+A all, Ctrl+D none, Ctrl+I invert, Delete clears, Ctrl+C and Ctrl+X copy and cut.<br><b>Layout</b> drag a grip (or a puck) and drop it near a screen edge to dock and rotate it. Drop it anywhere else and it returns home.'));
 
 /* files: autosave, project file, import, export (see io.js) */
 let autosaveOn = false;
@@ -438,7 +505,7 @@ async function importImage(f) {
   let bmp; try { bmp = await createImageBitmap(f); } catch { return flash('Could not read that image'); }
   const k = Math.min(1, W / bmp.width, H / bmp.height), w = bmp.width * k, h = bmp.height * k;
   const L = makeLayer({ name: ((f.name || 'Image').replace(/\.[^.]+$/, '') || 'Image').slice(0, 24) });
-  L.ctx.drawImage(bmp, (W - w) / 2, (H - h) / 2, w, h); bmp.close && bmp.close(); insertOp(L, S.active + 1); flash('Imported on a new layer');
+  L.ctx.drawImage(bmp, (W - w) / 2, (H - h) / 2, w, h); bmp.close && bmp.close(); insertOp(L, S.active + 1); S.tool = 'move'; sync(); XF.begin(L, true); flash('Imported. Drag to move it, use the controls to scale or rotate, then tap the tick', 3800);
 }
 const fbtn = (t, f) => { const b = el('button', 'btn wide', t); b.onclick = () => { closeAll(); f(); }; return b; };
 [['PNG', 'image/png', 'png'], ['JPEG', 'image/jpeg', 'jpg'], ['WebP', 'image/webp', 'webp']].forEach(([n, t, x]) => { const b = el('button', 'btn wide', n); b.onclick = () => { closeAll(); exportAs(t, x); }; fx.append(b); });
@@ -449,16 +516,22 @@ stage.ondragover = e => e.preventDefault();
 stage.ondrop = e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (!f) return; if (/\.inkwell$/i.test(f.name)) openProject(f); else if (f.type.startsWith('image/')) importImage(f); };
 
 addEventListener('keydown', e => {
-  const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey; if (k === 'escape') { closeAll(); return; }
+  const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey; if (k === 'escape') { XF.cancel(); SEL.cancelDrag(); closeAll(); return; }
   if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
   if (m && k === 's') { e.preventDefault(); saveProject(); return; }
   if (m && k === 'o') { e.preventDefault(); openProject(); return; }
   if (m && k === 'e') { e.preventDefault(); exportAs('image/png', 'png'); return; }
   if (k === 'h' && !m) { hideUi(); return; }
+  if (m && k === 'a') { e.preventDefault(); SEL.all(); return; }
+  if (m && k === 'd') { e.preventDefault(); SEL.clear(); return; }
+  if (m && k === 'i') { e.preventDefault(); SEL.invert(); return; }
+  if (m && (k === 'c' || k === 'x')) { e.preventDefault(); copySel(k === 'x'); return; }
+  if (k === 'delete' || k === 'backspace') { e.preventDefault(); clearSelected(); return; }
+  if (k === 'enter') { if (XF.active()) XF.commit(); else SEL.closePoly(); return; }
   if (m && k === 'z') { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); }
   else if (m && k === 'y') doRedo();
   else if (k === ' ') { space = true; e.preventDefault(); }
-  else if (!m) { const t = { b: 'brush', e: 'eraser', g: 'fill' }[k]; if (t) { S.tool = t; sync(); } if (k === 'm') pick('marker'); if (k === '0') fit(); if (k === '1') zoom100(); if (k === 'r') rotateBy(e.shiftKey ? -ROT : ROT); if (k === 'i') startPick(); if (k === '[') setSize(S.size - 2); if (k === ']') setSize(S.size + 2); }
+  else if (!m) { const t = { b: 'brush', e: 'eraser', g: 'fill', s: 'select', v: 'move' }[k]; if (t) { S.tool = t; sync(); } if (k === 'm') pick('marker'); if (k === '0') fit(); if (k === '1') zoom100(); if (k === 'r') rotateBy(e.shiftKey ? -ROT : ROT); if (k === 'i') startPick(); if (k === '[') setSize(S.size - 2); if (k === ']') setSize(S.size + 2); }
 });
 addEventListener('keyup', e => { if (e.key === ' ') space = false; });
 addEventListener('beforeunload', e => { if (IO.pending() || (IO.io.failed && canUndo())) e.preventDefault(); });

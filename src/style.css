@@ -105,3 +105,4 @@ input[type=number]{-moz-appearance:textfield}
 #fp.on{display:flex}
 .fx{display:flex;gap:6px}.fx .btn{flex:1;width:auto}
 .stat{color:var(--mut);line-height:1.35}
+#sp{max-height:70vh;overflow:auto}
